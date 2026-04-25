@@ -1,0 +1,5842 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a0f08">
+<title>Gang of Dice</title>
+<!-- PeerJS pour le multijoueur P2P (WebRTC) -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #fff;
+    user-select: none;
+  }
+  body {
+    background: #1a0f08 url('images/background.png') center top / cover no-repeat;
+    position: relative;
+  }
+  body::before {
+    content:"";
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.0) 30%, rgba(0,0,0,0.0) 60%, rgba(0,0,0,0.5) 100%);
+    pointer-events:none; z-index: 0;
+  }
+
+  /* Top Bar */
+  .topbar {
+    position: relative; z-index: 5;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 24px;
+    background: linear-gradient(180deg, rgba(20,10,5,0.85), rgba(20,10,5,0.4));
+    border-bottom: 2px solid rgba(255,140,40,0.35);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  .logo {
+    display:flex; align-items:center; gap:12px;
+    font-family: 'Impact','Arial Black',sans-serif;
+    font-size: 28px; letter-spacing: 2px;
+    color: #ffcc55;
+    text-shadow: 0 0 15px rgba(255,100,30,0.6), 2px 2px 0 #300;
+    transform: skew(-5deg);
+  }
+  .logo::before {
+    content:"🎲"; font-size: 30px; transform: skew(5deg);
+  }
+  .round-info {
+    font-size: 18px; font-weight: 600; color:#fff;
+    background: rgba(0,0,0,0.4);
+    padding: 8px 20px; border-radius: 20px;
+    border: 1px solid rgba(255,140,40,0.4);
+  }
+  .round-info span { color:#ffcc55; }
+
+  /* Main Layout - pleine largeur, panneau joueurs en overlay */
+  .main {
+    position: relative; z-index: 2;
+    padding: 20px;
+    height: calc(100vh - 72px);
+  }
+
+  /* Panneau joueurs - flottant en haut à droite */
+  .players-panel {
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 10;
+    pointer-events: auto;
+  }
+
+  .player-card {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    background: linear-gradient(135deg, rgba(245,232,210,0.96), rgba(230,215,190,0.94));
+    border: 2px solid rgba(100,60,30,0.4);
+    border-radius: 10px;
+    padding: 8px 12px 8px 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    transition: all 0.3s ease;
+    backdrop-filter: blur(6px);
+  }
+  .player-card.active {
+    border-color: #ffcc55;
+    box-shadow: 0 0 18px rgba(255,200,80,0.5), 0 4px 14px rgba(0,0,0,0.4);
+    transform: translateX(-2px);
+  }
+  .player-card.eliminated {
+    opacity: 0.45;
+    filter: grayscale(0.7);
+  }
+
+  .player-avatar {
+    width: 42px; height: 42px; border-radius: 50%;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, #ff6b2c, #b73312);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: bold;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(255,100,30,0.5), inset 0 -2px 4px rgba(0,0,0,0.2);
+    border: 2px solid rgba(255,255,255,0.4);
+    align-self: center;
+  }
+  .player-avatar.p2 {
+    background: linear-gradient(135deg, #2ca8ff, #1266b7);
+    box-shadow: 0 2px 6px rgba(40,150,255,0.5), inset 0 -2px 4px rgba(0,0,0,0.2);
+  }
+  .player-avatar.p3 {
+    background: linear-gradient(135deg, #5fdc4d, #1e8c1c);
+    box-shadow: 0 2px 6px rgba(90,200,70,0.5), inset 0 -2px 4px rgba(0,0,0,0.2);
+  }
+  .player-avatar.p4 {
+    background: linear-gradient(135deg, #c46cff, #7a1fc2);
+    box-shadow: 0 2px 6px rgba(170,90,255,0.5), inset 0 -2px 4px rgba(0,0,0,0.2);
+  }
+
+  .player-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .player-name {
+    font-weight: 700; font-size: 15px;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+  }
+  .player-name.p1 { color: #c53d1a; }
+  .player-name.p2 { color: #2a6b1e; }
+  .player-name.p3 { color: #1c5fb7; }
+  .player-name.p4 { color: #7d2eb5; }
+
+  .player-stats-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .stat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #2a1505;
+    background: rgba(255,255,255,0.5);
+    border: 1px solid rgba(100,60,30,0.25);
+    line-height: 1.4;
+  }
+  .stat-pill .stat-icon {
+    font-size: 11px;
+    filter: grayscale(0.2);
+  }
+  .stat-pill.dice-pill { background: rgba(60,60,60,0.15); }
+  .stat-pill.token-pill { background: rgba(220,180,60,0.25); }
+  .stat-pill.score-pill {
+    background: linear-gradient(135deg, rgba(180,220,100,0.4), rgba(140,200,70,0.35));
+    color: #2d5010;
+  }
+  .stat-pill.score-pill.invalid {
+    background: linear-gradient(135deg, rgba(255,100,100,0.4), rgba(220,60,60,0.35));
+    color: #7a1010;
+  }
+
+  /* Center - Play Area */
+  .play-area {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 14px;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+  }
+
+  .card-container {
+    position: relative;
+    width: 400px; height: 286px;
+    filter: drop-shadow(0 12px 24px rgba(0,0,0,0.65));
+    overflow: hidden;
+  }
+  .card {
+    width: 100%; height: 100%;
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+    transform-origin: center center;
+  }
+  /* Slide out to left, new card slides in from right */
+  .card.sliding-out {
+    animation: cardSlideOut 0.35s cubic-bezier(0.4, 0.0, 0.8, 0.2) forwards;
+  }
+  .card.sliding-in {
+    animation: cardSlideIn 0.45s cubic-bezier(0.2, 0.6, 0.3, 1) forwards;
+  }
+  @keyframes cardSlideOut {
+    0% { transform: translateX(0); opacity: 1; }
+    100% { transform: translateX(-140%); opacity: 0.2; }
+  }
+  @keyframes cardSlideIn {
+    0% { transform: translateX(140%); opacity: 0.2; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  .card-face {
+    position: absolute; inset: 0;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .card-front {
+    background-image: url('images/cards.png');
+    background-repeat: no-repeat;
+    background-size: auto;
+    /* Size/position set via JS */
+  }
+
+  .card-description {
+    background: rgba(245,230,210,0.95);
+    color: #2a1505;
+    padding: 14px 24px;
+    border-radius: 6px;
+    max-width: 680px;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 500;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    border: 1px solid rgba(180,100,40,0.3);
+    min-height: 58px;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  /* Dice Mats - 2 côte à côte */
+  .mats-container {
+    display: flex;
+    gap: 24px;
+    width: 100%;
+    justify-content: center;
+    align-items: stretch;
+    flex: 1;
+    min-height: 220px;
+    max-height: 340px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  /* Layout adaptatif selon nombre de joueurs */
+  .mats-container[data-count="2"] .mat-wrapper { max-width: 560px; flex: 1 1 45%; }
+  .mats-container[data-count="3"] {
+    gap: 16px;
+    max-height: 320px;
+  }
+  .mats-container[data-count="3"] .mat-wrapper { max-width: 380px; flex: 1 1 30%; }
+  .mats-container[data-count="3"] .dice-mat { min-height: 200px; }
+  .mats-container[data-count="4"] {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 12px;
+    max-height: 420px;
+  }
+  .mats-container[data-count="4"] .mat-wrapper { max-width: none; }
+  .mats-container[data-count="4"] .dice-mat { min-height: 180px; }
+  .mat-wrapper {
+    flex: 1;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: all 0.3s ease;
+  }
+  .mat-wrapper.active {
+    transform: translateY(-3px);
+  }
+  .mat-label {
+    position: absolute;
+    top: 34px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-shadow: 0 2px 3px rgba(0,0,0,0.6);
+    transition: all 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .mat-label.p1 { color: #d92727; }     /* rouge */
+  .mat-label.p2 { color: #1d8c2c; }     /* vert */
+  .mat-label.p3 { color: #1c5fb7; }     /* bleu */
+  .mat-label.p4 { color: #7d2eb5; }     /* violet */
+  .mat-wrapper.active .mat-label {
+    text-shadow: 0 0 12px rgba(255,200,80,0.7), 0 1px 2px rgba(0,0,0,0.7);
+  }
+
+  .dice-mat {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 220px;
+    background: url('images/tapis.png') center center / 100% 100% no-repeat;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .dice-canvas {
+    width: 100%; height: 100%;
+    max-width: 100%; max-height: 100%;
+    display: block;
+  }
+  .invalid-cross {
+    position: absolute;
+    /* croix.png a ses traits rouges internes qui occupent de 16% à 84% (H)
+       et 18% à 82% (V) de son image. On surdimensionne et on décale pour
+       faire coïncider les traits avec les diagonales utiles du tapis
+       (zone crème : 4% à 96% H, 6% à 93% V). */
+    left: -18%;
+    top: -18.5%;
+    width: 136.5%;
+    height: 137.2%;
+    background: url('images/croix.png') center center / 100% 100% no-repeat;
+    opacity: 0;
+    transform: scale(0.5) rotate(-10deg);
+    transform-origin: center center;
+    transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    pointer-events: none;
+    z-index: 5;
+    filter: drop-shadow(0 0 20px rgba(255,50,50,0.9));
+  }
+  .invalid-cross.visible {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+  .mat-score {
+    position: absolute;
+    top: 10px; right: 14px;
+    background: rgba(0,0,0,0.7);
+    color: #ffcc55;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 20px;
+    font-weight: bold;
+    font-family: 'Impact', sans-serif;
+    letter-spacing: 1px;
+    border: 1px solid rgba(255,200,80,0.5);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 4;
+  }
+  .mat-score.visible { opacity: 1; }
+  .mat-score.invalid { color: #ff4545; border-color: #ff4545; }
+
+  /* Controls */
+  .controls {
+    display: flex; gap: 14px;
+    background: rgba(0,0,0,0.5);
+    padding: 10px 16px;
+    border-radius: 40px;
+    border: 1px solid rgba(255,140,40,0.3);
+    backdrop-filter: blur(6px);
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 5;
+    margin-top: 4px;
+  }
+  .control-section {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .control-section.hidden { display: none; }
+  .control-section + .control-section {
+    padding-left: 14px;
+    border-left: 1px solid rgba(255,140,40,0.25);
+  }
+  .control-label {
+    color: #fff; font-size: 14px; font-weight: 500;
+    margin-right: 6px;
+  }
+  .control-label span { color:#ffcc55; font-weight: 700; font-size: 18px; }
+  .rolls-info {
+    color: #fff; font-size: 13px; font-weight: 500;
+    margin-right: 4px;
+  }
+  .rolls-info span { color:#66ff66; font-weight: 700; font-size: 16px; }
+  .btn {
+    background: linear-gradient(135deg, #4a2510, #2a1408);
+    color: #fff;
+    border: 1px solid rgba(255,140,40,0.5);
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #6a3515, #4a2510);
+    box-shadow: 0 0 12px rgba(255,140,40,0.5);
+    transform: translateY(-1px);
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary {
+    background: linear-gradient(135deg, #ff6b2c, #b73312);
+    font-size: 15px;
+    padding: 10px 24px;
+  }
+  .btn.primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff8545, #d14515);
+    box-shadow: 0 0 18px rgba(255,140,40,0.7);
+  }
+  .btn.validate {
+    background: linear-gradient(135deg, #2c9b3a, #1a7a26);
+    border-color: rgba(100,255,100,0.5);
+    font-size: 15px;
+    padding: 10px 24px;
+  }
+  .btn.validate:hover:not(:disabled) {
+    background: linear-gradient(135deg, #3cbb4a, #2a9b36);
+    box-shadow: 0 0 18px rgba(100,255,100,0.6);
+  }
+
+  /* History log */
+  .history {
+    margin-top: auto;
+    max-height: 120px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.3);
+    border-radius: 6px;
+    padding: 6px;
+    font-size: 11px;
+  }
+  .history::-webkit-scrollbar { width: 4px; }
+  .history::-webkit-scrollbar-thumb { background: rgba(255,140,40,0.4); border-radius: 2px; }
+  .log-entry {
+    padding: 3px 6px;
+    margin-bottom: 2px;
+    border-left: 2px solid rgba(255,140,40,0.5);
+    color: #ddd;
+  }
+  .log-entry.valid { border-left-color: #66ff66; }
+  .log-entry.invalid { border-left-color: #ff4545; }
+  .log-entry.win { border-left-color: #ffcc55; color: #ffcc55; }
+
+  /* Overlay / Modal */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.4s ease;
+  }
+  .overlay.visible { opacity: 1; pointer-events: all; }
+  .modal {
+    background: linear-gradient(145deg, #2a1505, #1a0d03);
+    border: 2px solid #ffcc55;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    max-width: 500px;
+    box-shadow: 0 0 40px rgba(255,200,80,0.4);
+    transform: scale(0.8);
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .overlay.visible .modal { transform: scale(1); }
+  .modal h1 {
+    font-family: 'Impact', sans-serif;
+    font-size: 48px;
+    color: #ffcc55;
+    margin-bottom: 16px;
+    text-shadow: 0 0 20px rgba(255,200,80,0.6);
+    letter-spacing: 3px;
+  }
+  .modal p { font-size: 16px; margin-bottom: 20px; color: #fff; }
+  .modal .winner-name {
+    font-size: 24px; color: #ffcc55; font-weight: bold;
+    margin: 20px 0;
+  }
+
+  /* Toast notifications */
+  .toast-container {
+    position: fixed; top: 90px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none;
+  }
+  .toast {
+    background: rgba(0,0,0,0.85);
+    border: 1px solid rgba(255,140,40,0.5);
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-weight: 600;
+    color: #fff;
+    animation: toastIn 0.3s ease forwards, toastOut 0.3s ease 2.2s forwards;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  }
+  .toast.success { border-color: #66ff66; color: #66ff66; }
+  .toast.error { border-color: #ff4545; color: #ff6666; }
+  .toast.info { border-color: #ffcc55; color: #ffcc55; }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toastOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-20px); }
+  }
+
+  /* Animations */
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 rgba(255,200,80,0.4); }
+    50% { box-shadow: 0 0 25px rgba(255,200,80,0.8); }
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .main { padding: 10px; }
+    .players-panel { width: 260px; top: 14px; right: 10px; }
+    .player-card { padding: 6px 10px 6px 6px; gap: 8px; }
+    .player-avatar { width: 36px; height: 36px; font-size: 13px; }
+    .player-name { font-size: 13px; }
+    .stat-pill { font-size: 12px; padding: 1px 6px; }
+  }
+
+  /* Tablet (700-900px) — réduction des dimensions */
+  @media (max-width: 900px) {
+    .topbar { padding: 8px 14px; }
+    .logo { font-size: 22px; letter-spacing: 1.5px; }
+    .round-info { font-size: 13px; padding: 4px 10px; }
+    .card-container { width: 320px; height: 230px; }
+    .card-description { font-size: 14px; padding: 10px 16px; max-width: 480px; }
+    .mat-label { font-size: 22px; top: 26px; }
+    .controls { padding: 8px 12px; gap: 10px; }
+    .btn { font-size: 13px; padding: 7px 12px; }
+    .btn-primary { font-size: 14px; padding: 8px 18px; }
+  }
+
+  /* Mobile (≤640px) — réorganisation verticale, panneau joueurs en haut */
+  @media (max-width: 640px) {
+    body { overflow-y: auto; overflow-x: hidden; }
+    html, body { height: auto; min-height: 100%; }
+    .main {
+      flex-direction: column;
+      padding: 6px;
+      min-height: 100vh;
+      height: auto;
+    }
+    .topbar {
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 10px;
+    }
+    .logo { font-size: 18px; letter-spacing: 1px; }
+    .logo-icon { width: 28px; height: 28px; font-size: 14px; }
+    .round-info {
+      font-size: 11px;
+      padding: 3px 8px;
+      letter-spacing: 0.5px;
+    }
+    /* Panneau joueurs : passe en horizontal en haut */
+    .players-panel {
+      position: relative;
+      top: 0; right: 0; left: 0;
+      width: 100%;
+      flex-direction: row;
+      gap: 6px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    .player-card {
+      flex: 1 1 calc(50% - 4px);
+      min-width: 0;
+      padding: 5px 8px 5px 5px;
+      gap: 6px;
+    }
+    .player-avatar {
+      width: 30px; height: 30px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .player-name { font-size: 12px; }
+    .stat-pill { font-size: 11px; padding: 1px 4px; gap: 2px; }
+    .stat-icon { font-size: 11px; }
+
+    /* Aire de jeu : tout réduit */
+    .play-area {
+      gap: 8px;
+      padding-top: 0;
+      overflow: visible;
+      height: auto;
+      flex: none;
+    }
+    .card-container {
+      width: 240px;
+      height: 172px;
+    }
+    .card-description {
+      font-size: 12px;
+      line-height: 1.35;
+      padding: 8px 12px;
+      max-width: 95%;
+    }
+
+    /* Tapis : layout vertical (l'un en dessous de l'autre) sur mobile */
+    .mats-container {
+      flex-direction: column;
+      gap: 8px;
+      max-height: none;
+      min-height: 0;
+      margin-bottom: 6px;
+    }
+    .mats-container[data-count="2"] .mat-wrapper,
+    .mats-container[data-count="3"] .mat-wrapper,
+    .mats-container[data-count="4"] .mat-wrapper {
+      max-width: 100%;
+      flex: none;
+    }
+    .mats-container[data-count="3"],
+    .mats-container[data-count="4"] {
+      display: flex;
+      flex-direction: column;
+      max-height: none;
+    }
+    .dice-mat,
+    .mats-container[data-count="3"] .dice-mat,
+    .mats-container[data-count="4"] .dice-mat {
+      min-height: 140px;
+      max-height: 160px;
+    }
+    .mat-label {
+      font-size: 18px;
+      top: 18px;
+    }
+    .mat-score {
+      font-size: 14px;
+      padding: 4px 10px;
+    }
+
+    /* Controls : compact et flex-wrap */
+    .controls {
+      padding: 6px 10px;
+      gap: 8px;
+      border-radius: 24px;
+      flex-wrap: wrap;
+    }
+    .control-section {
+      gap: 5px;
+    }
+    .control-section + .control-section {
+      padding-left: 8px;
+    }
+    .control-label {
+      font-size: 11px;
+    }
+    .btn {
+      font-size: 12px;
+      padding: 6px 10px;
+      min-width: 0;
+    }
+    .btn-primary {
+      font-size: 13px;
+      padding: 7px 14px;
+    }
+
+    /* Toasts plus petits */
+    .toast {
+      font-size: 12px;
+      padding: 8px 14px;
+      max-width: 90vw;
+    }
+  }
+
+  /* Très petit mobile (≤380px) */
+  @media (max-width: 380px) {
+    .logo { font-size: 16px; }
+    .player-card { flex: 1 1 100%; }
+    .card-container { width: 200px; height: 144px; }
+    .card-description { font-size: 11px; padding: 6px 10px; }
+    .dice-mat,
+    .mats-container[data-count="3"] .dice-mat,
+    .mats-container[data-count="4"] .dice-mat {
+      min-height: 120px;
+      max-height: 140px;
+    }
+    .mat-label { font-size: 16px; top: 14px; }
+    .btn { font-size: 11px; padding: 5px 8px; }
+  }
+
+  /* Désactiver les hover sur écrans tactiles (évite "stuck hover") */
+  @media (hover: none) {
+    .btn:hover, .welcome-mode-btn:hover, .welcome-ai-btn:hover {
+      transform: none;
+    }
+  }
+
+  /* Canvas de vol - plein écran, au-dessus de tout */
+  .fly-canvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 50;
+    display: none;
+  }
+  .fly-canvas.active {
+    display: block;
+  }
+  /* Effet de "réception" sur la carte joueur */
+  @keyframes cardReceivePulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+  .player-card.receiving {
+    animation: cardReceivePulse 0.4s ease-in-out;
+    box-shadow: 0 0 30px rgba(255,200,80,0.9), 0 0 15px rgba(255,255,255,0.4);
+    border-color: #ffcc55;
+  }
+  /* ============================================================
+     WELCOME MENU - Écran d'accueil
+  ============================================================ */
+  .welcome-menu {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    transition: opacity 0.5s ease;
+  }
+  .welcome-menu.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .welcome-bg {
+    position: absolute;
+    inset: 0;
+    background: #1a0f08 url('images/background.png') center top / cover no-repeat;
+    filter: brightness(0.55) blur(2px);
+    z-index: 0;
+  }
+  .welcome-bg::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.85) 100%);
+  }
+  .welcome-content {
+    position: relative;
+    z-index: 1;
+    width: min(640px, 92vw);
+    padding: 36px 44px;
+    background: linear-gradient(145deg, rgba(30,15,8,0.92), rgba(15,8,4,0.88));
+    border: 2px solid rgba(255,140,40,0.5);
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.08);
+    backdrop-filter: blur(8px);
+    text-align: center;
+  }
+  .welcome-title {
+    font-family: 'Impact', 'Arial Black', sans-serif;
+    font-size: 56px;
+    color: #ffcc55;
+    text-shadow: 0 4px 12px rgba(255,100,30,0.6), 0 0 30px rgba(255,200,80,0.3);
+    margin: 0;
+    letter-spacing: 4px;
+    line-height: 1;
+  }
+  .welcome-tagline {
+    color: #d8b48c;
+    font-size: 14px;
+    font-style: italic;
+    margin: 12px 0 28px 0;
+    opacity: 0.9;
+  }
+  .welcome-section {
+    margin-bottom: 20px;
+    text-align: left;
+  }
+  .welcome-section:last-child {
+    margin-bottom: 0;
+  }
+  .welcome-label {
+    display: block;
+    color: #ff9b6e;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+  .welcome-input {
+    width: 100%;
+    padding: 14px 18px;
+    background: rgba(0,0,0,0.5);
+    border: 2px solid rgba(255,140,40,0.4);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: 1px;
+    outline: none;
+    transition: all 0.2s ease;
+    box-sizing: border-box;
+  }
+  .welcome-input:focus {
+    border-color: #ffcc55;
+    background: rgba(0,0,0,0.7);
+    box-shadow: 0 0 16px rgba(255,200,80,0.3);
+  }
+  .welcome-input::placeholder {
+    color: rgba(255,255,255,0.3);
+    font-style: italic;
+  }
+  .welcome-mode-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .welcome-mode-btn {
+    position: relative;
+    background: linear-gradient(145deg, rgba(40,20,10,0.8), rgba(20,10,5,0.7));
+    border: 2px solid rgba(255,140,40,0.35);
+    border-radius: 12px;
+    padding: 22px 14px;
+    cursor: pointer;
+    color: #fff;
+    font-family: inherit;
+    transition: all 0.25s ease;
+    text-align: center;
+  }
+  .welcome-mode-btn:hover {
+    transform: translateY(-3px);
+    border-color: #ffcc55;
+    box-shadow: 0 8px 20px rgba(255,150,50,0.3);
+    background: linear-gradient(145deg, rgba(60,30,15,0.85), rgba(30,15,8,0.75));
+  }
+  .welcome-mode-btn:active {
+    transform: translateY(-1px);
+  }
+  .welcome-mode-btn.disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .welcome-mode-btn.disabled:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: rgba(255,140,40,0.35);
+  }
+  .welcome-mode-icon {
+    font-size: 38px;
+    margin-bottom: 6px;
+  }
+  .welcome-mode-name {
+    font-size: 18px;
+    font-weight: 800;
+    color: #ffcc55;
+    letter-spacing: 0.8px;
+  }
+  .welcome-mode-desc {
+    font-size: 12px;
+    color: #d8b48c;
+    margin-top: 4px;
+    opacity: 0.85;
+  }
+  .welcome-mode-badge {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: rgba(255,200,80,0.25);
+    border: 1px solid rgba(255,200,80,0.5);
+    color: #ffcc55;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .welcome-ai-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .welcome-ai-btn {
+    background: linear-gradient(145deg, rgba(40,20,10,0.8), rgba(20,10,5,0.7));
+    border: 2px solid rgba(255,140,40,0.35);
+    border-radius: 12px;
+    padding: 22px 8px;
+    cursor: pointer;
+    color: #fff;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    text-align: center;
+  }
+  .welcome-ai-btn:hover {
+    transform: translateY(-2px);
+    border-color: #ffcc55;
+  }
+  .welcome-ai-btn.selected {
+    border-color: #ffcc55;
+    background: linear-gradient(145deg, rgba(80,40,15,0.9), rgba(50,25,10,0.85));
+    box-shadow: 0 0 20px rgba(255,200,80,0.4), inset 0 0 12px rgba(255,200,80,0.15);
+  }
+  .welcome-ai-num {
+    font-family: 'Impact', sans-serif;
+    font-size: 36px;
+    color: #ffcc55;
+    line-height: 1;
+  }
+  .welcome-ai-desc {
+    font-size: 12px;
+    color: #d8b48c;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+  .welcome-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    margin-top: 26px;
+  }
+  .welcome-back-btn {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,140,40,0.3);
+    color: #d8b48c;
+    padding: 12px 22px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+  }
+  .welcome-back-btn:hover {
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+  }
+  .welcome-launch-btn {
+    background: linear-gradient(135deg, #ff8c2c, #d54a10);
+    border: none;
+    color: #fff;
+    padding: 14px 32px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 14px rgba(255,140,40,0.4);
+  }
+  .welcome-launch-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(255,140,40,0.6);
+  }
+  .welcome-launch-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Recherche rapide : grille 1 large + 2 petits */
+  .welcome-mode-grid-3 {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+  }
+  .welcome-mode-btn-featured {
+    grid-column: 1 / -1;
+    background: linear-gradient(145deg, rgba(80,40,15,0.9), rgba(50,25,10,0.85));
+    border-color: rgba(255,200,80,0.6);
+    position: relative;
+    overflow: hidden;
+  }
+  .welcome-mode-btn-featured::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, transparent 30%, rgba(255,200,80,0.15) 50%, transparent 70%);
+    transform: translateX(-100%);
+    animation: featuredShine 3s ease-in-out infinite;
+  }
+  @keyframes featuredShine {
+    0%, 100% { transform: translateX(-100%); }
+    50% { transform: translateX(100%); }
+  }
+  .welcome-mode-btn-featured .welcome-mode-name {
+    color: #ffd970;
+    font-size: 20px;
+  }
+
+  /* Écran recherche rapide */
+  .welcome-quick-spinner {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 20px auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .welcome-quick-spinner-icon {
+    font-size: 60px;
+    z-index: 2;
+    animation: quickPulse 1.4s ease-in-out infinite;
+  }
+  .welcome-quick-spinner-pulse {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 3px solid rgba(255,200,80,0.4);
+    animation: quickRing 1.6s ease-out infinite;
+  }
+  .welcome-quick-spinner-pulse::after {
+    content: '';
+    position: absolute;
+    inset: -10px;
+    border-radius: 50%;
+    border: 3px solid rgba(255,200,80,0.25);
+    animation: quickRing 1.6s ease-out infinite 0.5s;
+  }
+  @keyframes quickPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+  }
+  @keyframes quickRing {
+    0% {
+      transform: scale(0.8);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1.8);
+      opacity: 0;
+    }
+  }
+  .welcome-quick-status {
+    text-align: center;
+    color: #ffcc55;
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 8px;
+  }
+  .welcome-quick-info {
+    text-align: center;
+    color: #d8b48c;
+    font-size: 12px;
+    font-style: italic;
+    margin-top: 8px;
+    opacity: 0.85;
+  }
+
+  /* Boutons de taille pour la recherche rapide (réutilise welcome-ai-btn style) */
+  .welcome-quick-size-btn {
+    background: linear-gradient(145deg, rgba(40,20,10,0.8), rgba(20,10,5,0.7));
+    border: 2px solid rgba(255,140,40,0.35);
+    border-radius: 12px;
+    padding: 22px 8px;
+    cursor: pointer;
+    color: #fff;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    text-align: center;
+  }
+  .welcome-quick-size-btn:hover {
+    transform: translateY(-3px);
+    border-color: #ffcc55;
+    box-shadow: 0 8px 22px rgba(255,200,80,0.35);
+    background: linear-gradient(145deg, rgba(80,40,15,0.85), rgba(50,25,10,0.75));
+  }
+
+  /* Slots de progression dans la vue recherche */
+  .welcome-quick-slots {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 16px;
+  }
+  .welcome-quick-slot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,140,40,0.2);
+    border-radius: 8px;
+    transition: all 0.3s ease;
+  }
+  .welcome-quick-slot.filled {
+    border-color: rgba(255,200,80,0.5);
+    background: linear-gradient(135deg, rgba(80,40,15,0.5), rgba(50,25,10,0.4));
+  }
+  .welcome-quick-slot.you {
+    border-color: rgba(100,200,80,0.6);
+    background: linear-gradient(135deg, rgba(40,80,30,0.5), rgba(30,60,20,0.4));
+  }
+  .welcome-quick-slot-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    background: rgba(255,140,40,0.15);
+    border: 1px solid rgba(255,140,40,0.3);
+    color: #ffcc55;
+    font-weight: 700;
+  }
+  .welcome-quick-slot.filled .welcome-quick-slot-icon {
+    background: linear-gradient(135deg, #ff6b2c, #b73312);
+    color: #fff;
+    border-color: rgba(255,255,255,0.4);
+  }
+  .welcome-quick-slot.you .welcome-quick-slot-icon {
+    background: linear-gradient(135deg, #6fdc4d, #2c8c2c);
+  }
+  .welcome-quick-slot-name {
+    flex: 1;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .welcome-quick-slot-name.empty {
+    color: rgba(255,255,255,0.4);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .welcome-quick-slot-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255,200,80,0.2);
+    color: #ffcc55;
+    border: 1px solid rgba(255,200,80,0.4);
+  }
+  .welcome-quick-slot.you .welcome-quick-slot-tag {
+    background: rgba(100,200,80,0.25);
+    color: #8fd968;
+    border-color: rgba(100,200,80,0.5);
+  }
+
+  /* ----- Vues Multijoueur ----- */
+  .welcome-roomcode {
+    background: linear-gradient(145deg, rgba(40,20,10,0.85), rgba(20,10,5,0.75));
+    border: 2px solid rgba(255,200,80,0.5);
+    border-radius: 14px;
+    padding: 18px 24px;
+    text-align: center;
+    color: #ffcc55;
+    font-family: 'Courier New', 'Consolas', monospace;
+    font-size: 38px;
+    font-weight: 800;
+    letter-spacing: 8px;
+    text-shadow: 0 2px 6px rgba(255,150,50,0.4);
+    margin-bottom: 8px;
+    user-select: all;
+    cursor: text;
+  }
+  .welcome-roomcode-hint {
+    color: #d8b48c;
+    font-size: 12px;
+    text-align: center;
+    font-style: italic;
+    margin-bottom: 10px;
+    opacity: 0.85;
+  }
+  .welcome-copy-btn {
+    display: block;
+    margin: 0 auto;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,200,80,0.4);
+    color: #ffcc55;
+    padding: 8px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+  }
+  .welcome-copy-btn:hover {
+    background: rgba(0,0,0,0.6);
+    border-color: #ffcc55;
+  }
+  .welcome-copy-btn.copied {
+    background: rgba(60,160,40,0.4);
+    border-color: #6fdc4d;
+    color: #fff;
+  }
+  .welcome-input-code {
+    font-family: 'Courier New', 'Consolas', monospace;
+    font-size: 28px;
+    letter-spacing: 8px;
+    text-transform: uppercase;
+    text-align: center;
+  }
+  .welcome-slots {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .welcome-slot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,140,40,0.25);
+    border-radius: 10px;
+    padding: 10px 14px;
+    transition: all 0.2s ease;
+  }
+  .welcome-slot.filled {
+    border-color: rgba(255,200,80,0.5);
+    background: linear-gradient(135deg, rgba(80,40,15,0.6), rgba(50,25,10,0.5));
+  }
+  .welcome-slot.host { border-color: #ffcc55; }
+  .welcome-slot-num {
+    width: 28px; height: 28px;
+    background: rgba(255,140,40,0.2);
+    border: 1px solid rgba(255,140,40,0.4);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #ffcc55;
+  }
+  .welcome-slot.filled .welcome-slot-num {
+    background: linear-gradient(135deg, #ff6b2c, #b73312);
+    color: #fff;
+    border-color: rgba(255,255,255,0.4);
+  }
+  .welcome-slot-name {
+    flex: 1;
+    color: #fff;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .welcome-slot-name.empty {
+    color: rgba(255,255,255,0.3);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .welcome-slot-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(255,200,80,0.2);
+    color: #ffcc55;
+    border: 1px solid rgba(255,200,80,0.4);
+  }
+  .welcome-slot-tag.you {
+    background: rgba(100,200,80,0.25);
+    color: #8fd968;
+    border-color: rgba(100,200,80,0.5);
+  }
+  .welcome-status {
+    margin-top: 16px;
+    text-align: center;
+    color: #d8b48c;
+    font-size: 13px;
+    font-style: italic;
+    min-height: 18px;
+  }
+  .welcome-status.error {
+    color: #ff6e6e;
+  }
+  .welcome-status.success {
+    color: #8fd968;
+  }
+  .welcome-status .pulse {
+    display: inline-block;
+    animation: dotPulse 1.4s infinite;
+  }
+  @keyframes dotPulse {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
+  }
+
+  @media (max-width: 600px) {
+    .welcome-menu {
+      align-items: flex-start;
+      overflow-y: auto;
+      padding: 16px 10px;
+    }
+    .welcome-content {
+      padding: 22px 18px;
+      width: 100%;
+      max-width: none;
+    }
+    .welcome-title {
+      font-size: 36px;
+      letter-spacing: 2px;
+    }
+    .welcome-tagline {
+      font-size: 12px;
+      margin-bottom: 18px;
+    }
+    .welcome-section {
+      margin-bottom: 16px;
+    }
+    .welcome-input {
+      padding: 12px 14px;
+      font-size: 16px; /* >=16 pour pas zoomer sur iOS */
+    }
+    .welcome-mode-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .welcome-mode-btn {
+      padding: 16px 12px;
+    }
+    .welcome-mode-icon { font-size: 32px; }
+    .welcome-mode-name { font-size: 16px; }
+    .welcome-mode-desc { font-size: 11px; }
+    .welcome-roomcode {
+      font-size: 26px;
+      letter-spacing: 4px;
+      padding: 14px 16px;
+    }
+    .welcome-input-code {
+      font-size: 22px;
+      letter-spacing: 5px;
+    }
+    .welcome-ai-grid {
+      gap: 8px;
+    }
+    .welcome-ai-btn {
+      padding: 16px 4px;
+    }
+    .welcome-ai-num { font-size: 28px; }
+    .welcome-actions {
+      flex-direction: column-reverse;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .welcome-back-btn,
+    .welcome-launch-btn {
+      width: 100%;
+      padding: 12px 18px;
+      font-size: 14px;
+    }
+    .welcome-slot {
+      padding: 8px 10px;
+    }
+    .welcome-slot-name { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     MENU D'ACCUEIL - écran d'accueil avec saisie pseudo et mode
+============================================================ -->
+<div id="welcomeMenu" class="welcome-menu">
+  <div class="welcome-bg"></div>
+  <div class="welcome-content">
+    <h1 class="welcome-title">GANG OF DICE</h1>
+    <p class="welcome-tagline">Le boss prend sa retraite... À toi de prendre les commandes.</p>
+
+    <!-- Vue 1 : Saisie pseudo + choix mode -->
+    <div class="welcome-view" id="welcomeViewMain">
+      <div class="welcome-section">
+        <label class="welcome-label" for="welcomePseudo">Ton pseudo</label>
+        <input type="text" id="welcomePseudo" class="welcome-input" maxlength="14" placeholder="Pseudo" autocomplete="off" />
+      </div>
+
+      <div class="welcome-section">
+        <label class="welcome-label">Mode de jeu</label>
+        <div class="welcome-mode-grid">
+          <button class="welcome-mode-btn" id="welcomeBtnSolo">
+            <div class="welcome-mode-icon">🎲</div>
+            <div class="welcome-mode-name">Mode Solo</div>
+            <div class="welcome-mode-desc">Affronte 1 à 3 IA</div>
+          </button>
+          <button class="welcome-mode-btn" id="welcomeBtnMulti">
+            <div class="welcome-mode-icon">🌐</div>
+            <div class="welcome-mode-name">Multijoueur</div>
+            <div class="welcome-mode-desc">En ligne, jusqu'à 4 joueurs</div>
+            <div class="welcome-mode-badge">Bientôt</div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vue 2 : Choix nombre d'IA (mode solo) -->
+    <div class="welcome-view" id="welcomeViewSolo" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label">Combien d'adversaires ?</label>
+        <div class="welcome-ai-grid">
+          <button class="welcome-ai-btn" data-ai="1">
+            <div class="welcome-ai-num">1</div>
+            <div class="welcome-ai-desc">IA</div>
+          </button>
+          <button class="welcome-ai-btn" data-ai="2">
+            <div class="welcome-ai-num">2</div>
+            <div class="welcome-ai-desc">IA</div>
+          </button>
+          <button class="welcome-ai-btn" data-ai="3">
+            <div class="welcome-ai-num">3</div>
+            <div class="welcome-ai-desc">IA</div>
+          </button>
+        </div>
+      </div>
+
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromSolo">← Retour</button>
+        <button class="welcome-launch-btn" id="welcomeLaunchSolo">Lancer la partie ▶</button>
+      </div>
+    </div>
+
+    <!-- Vue 3 : Choix créer / rejoindre (multijoueur) -->
+    <div class="welcome-view" id="welcomeViewMultiChoice" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label">Multijoueur en ligne</label>
+        <div class="welcome-mode-grid welcome-mode-grid-3">
+          <button class="welcome-mode-btn welcome-mode-btn-featured" id="welcomeBtnQuick">
+            <div class="welcome-mode-icon">⚡</div>
+            <div class="welcome-mode-name">Recherche rapide</div>
+            <div class="welcome-mode-desc">Trouve un adversaire en 1 clic</div>
+          </button>
+          <button class="welcome-mode-btn" id="welcomeBtnCreate">
+            <div class="welcome-mode-icon">🆕</div>
+            <div class="welcome-mode-name">Créer</div>
+            <div class="welcome-mode-desc">Crée une partie privée</div>
+          </button>
+          <button class="welcome-mode-btn" id="welcomeBtnJoin">
+            <div class="welcome-mode-icon">🔑</div>
+            <div class="welcome-mode-name">Rejoindre</div>
+            <div class="welcome-mode-desc">Avec un code partagé</div>
+          </button>
+        </div>
+      </div>
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromMultiChoice">← Retour</button>
+      </div>
+    </div>
+
+    <!-- Vue 7 : Recherche rapide en cours -->
+    <!-- Vue 7a : Choix de la taille de partie pour la recherche rapide -->
+    <div class="welcome-view" id="welcomeViewQuickSize" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label">Recherche rapide — combien de joueurs ?</label>
+        <div class="welcome-ai-grid">
+          <button class="welcome-quick-size-btn" data-size="2">
+            <div class="welcome-ai-num">2</div>
+            <div class="welcome-ai-desc">Joueurs</div>
+          </button>
+          <button class="welcome-quick-size-btn" data-size="3">
+            <div class="welcome-ai-num">3</div>
+            <div class="welcome-ai-desc">Joueurs</div>
+          </button>
+          <button class="welcome-quick-size-btn" data-size="4">
+            <div class="welcome-ai-num">4</div>
+            <div class="welcome-ai-desc">Joueurs</div>
+          </button>
+        </div>
+      </div>
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromQuickSize">← Retour</button>
+      </div>
+    </div>
+
+    <!-- Vue 7b : Recherche rapide en cours -->
+    <div class="welcome-view" id="welcomeViewQuick" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label" id="welcomeQuickLabel">Recherche d'un adversaire</label>
+        <div class="welcome-quick-spinner">
+          <div class="welcome-quick-spinner-icon">⚡</div>
+          <div class="welcome-quick-spinner-pulse"></div>
+        </div>
+        <div class="welcome-quick-status" id="welcomeQuickStatus">
+          Recherche en cours<span class="pulse">...</span>
+        </div>
+        <div class="welcome-quick-info" id="welcomeQuickInfo">
+          On scanne les serveurs pour te trouver des adversaires
+        </div>
+        <div class="welcome-quick-slots" id="welcomeQuickSlots">
+          <!-- Slots remplis dynamiquement -->
+        </div>
+      </div>
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBtnCancelQuick">✕ Annuler</button>
+      </div>
+    </div>
+
+    <!-- Vue 4 : Salon hôte (créer une partie) -->
+    <div class="welcome-view" id="welcomeViewHost" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label">Code de la partie</label>
+        <div class="welcome-roomcode" id="welcomeRoomCode">- - - - - -</div>
+        <div class="welcome-roomcode-hint">Partage ce code avec tes amis pour qu'ils rejoignent</div>
+        <button class="welcome-copy-btn" id="welcomeCopyCode">📋 Copier le code</button>
+      </div>
+
+      <div class="welcome-section">
+        <label class="welcome-label">Joueurs dans la salle</label>
+        <div class="welcome-slots" id="welcomeSlots">
+          <!-- Les slots sont générés dynamiquement -->
+        </div>
+      </div>
+
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromHost">← Quitter</button>
+        <button class="welcome-launch-btn" id="welcomeStartMulti" disabled>Lancer la partie ▶</button>
+      </div>
+    </div>
+
+    <!-- Vue 5 : Saisie du code (rejoindre une partie) -->
+    <div class="welcome-view" id="welcomeViewJoin" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label" for="welcomeJoinCode">Code de la partie</label>
+        <input type="text" id="welcomeJoinCode" class="welcome-input welcome-input-code" maxlength="8" placeholder="ABC123" autocomplete="off" />
+      </div>
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromJoin">← Retour</button>
+        <button class="welcome-launch-btn" id="welcomeBtnDoJoin">Rejoindre ▶</button>
+      </div>
+      <div class="welcome-status" id="welcomeJoinStatus"></div>
+    </div>
+
+    <!-- Vue 6 : Salon invité (en attente que l'hôte lance) -->
+    <div class="welcome-view" id="welcomeViewLobby" style="display:none;">
+      <div class="welcome-section">
+        <label class="welcome-label">Salon de <span id="welcomeLobbyHostName">l'hôte</span></label>
+        <div class="welcome-roomcode" id="welcomeLobbyCode">- - - - - -</div>
+      </div>
+
+      <div class="welcome-section">
+        <label class="welcome-label">Joueurs dans la salle</label>
+        <div class="welcome-slots" id="welcomeLobbySlots">
+          <!-- Slots dans le lobby invité -->
+        </div>
+      </div>
+
+      <div class="welcome-status" id="welcomeLobbyStatus">En attente que l'hôte lance la partie...</div>
+
+      <div class="welcome-actions">
+        <button class="welcome-back-btn" id="welcomeBackFromLobby">← Quitter</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="topbar">
+  <div class="logo">GANG OF DICE</div>
+  <div class="round-info">Manche <span id="roundNum">1</span>/<span id="roundMax">12</span></div>
+  <div class="round-info">Tour: <span id="turnPlayer">Joueur 1</span></div>
+</div>
+
+<div class="main">
+  <!-- Panneau joueurs compact flottant en haut à droite (rempli dynamiquement) -->
+  <div class="players-panel" id="playersPanel">
+    <!-- Les player-cards sont générées par JS selon le nombre de joueurs -->
+  </div>
+
+  <!-- Aire de jeu pleine largeur -->
+  <div class="play-area">
+    <div class="card-container">
+      <div class="card" id="card">
+        <div class="card-face card-front" id="cardFront"></div>
+      </div>
+    </div>
+    <div class="card-description" id="cardDesc">
+      Nouvelle manche — Révélation de la carte...
+    </div>
+
+    <div class="mats-container" id="matsContainer">
+      <!-- Les mat-wrappers sont générées par JS selon le nombre de joueurs -->
+    </div>
+
+    <div class="controls">
+      <div class="control-section" id="chooseSection">
+        <span class="control-label">Dés à lancer: <span id="diceChosen">1</span></span>
+        <button class="btn" id="btnMinus">− Retirer</button>
+        <button class="btn" id="btnPlus">+ Ajouter</button>
+      </div>
+      <div class="control-section" id="rollSection">
+        <span class="rolls-info">Lancers restants: <span id="rollsLeft">3</span>/3</span>
+        <button class="btn primary" id="btnRoll">🎲 LANCER</button>
+        <button class="btn validate" id="btnValidate" style="display:none;">✓ VALIDER</button>
+      </div>
+      <button class="btn" id="btnNext" style="display:none;">Suivant ▶</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<!-- Canvas overlay pour animation de vol des dés vers le gagnant -->
+<canvas id="flyCanvas" class="fly-canvas"></canvas>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h1 id="modalTitle">VICTOIRE</h1>
+    <p id="modalText">Description de la fin</p>
+    <div class="winner-name" id="modalWinner"></div>
+    <button class="btn primary" id="btnRestart">🔁 Nouvelle partie</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   GANG OF DICE - 60 FPS Canvas Game
+   ============================================================ */
+
+// ------------ Game Configuration ------------
+const CONFIG = {
+  maxRounds: 12,
+  startDice: 8,
+  startTokens: 3,
+  maxDicePerRoll: 8
+};
+
+// ------------ Cards Definition ------------
+// Face 6 = "boss" : valeur nulle (compte 0 pour la somme, ignorée pour les règles)
+
+// Évalue une règle en filtrant les "boss" (6)
+function evalCardRule(card, dice) {
+  const nonBoss = dice.filter(d => d !== 6);
+  // Si après filtrage il n'y a plus de dés, la règle est évaluée sur tableau vide
+  return card.rule(nonBoss);
+}
+
+// Calcule la somme d'un lancer (les 6 / boss valent 0)
+function diceSum(dice) {
+  return dice.reduce((a,b) => a + (b === 6 ? 0 : b), 0);
+}
+
+const CARDS = [
+  // =========================================================
+  // BOMBES (fond papier) : relance possible, invalide en fin de tour
+  // EXPLOSIONS (fond jaune) : invalide immédiatement
+  // Règle: le lancer est INVALIDE si la condition est atteinte
+  // =========================================================
+
+  // ---------- Row 0 ----------
+  // (0,0) 7+ — BOMBE
+  { id:'sum7', name:'7 ou plus', explosive:false,
+    desc:"Le lancer est invalide si le total est de 7 ou plus.",
+    rule:(dice)=> sumDice(dice) < 7,
+    needsMinDice:1, sx:0, sy:0 },
+
+  // (1,0) ◼≠◼ — BOMBE — 2 valeurs différentes
+  { id:'diff2', name:'2 valeurs différentes', explosive:false,
+    desc:"Le lancer est invalide s'il contient au moins deux valeurs différentes.",
+    rule:(dice)=>{ const s=new Set(dice); return s.size < 2; },
+    needsMinDice:1, sx:1, sy:0 },
+
+  // (2,0) — BOMBE — valeurs interdites : 1, 3 ou 5 (impaires)
+  { id:'ban135', name:'Ni 1, ni 3, ni 5', explosive:false,
+    desc:"Le lancer est invalide s'il contient un 1, un 3 ou un 5.",
+    rule:(dice)=> !dice.some(d => d===1 || d===3 || d===5),
+    needsMinDice:1, sx:2, sy:0 },
+
+  // (3,0) 3/4/5 — BOMBE — valeurs interdites : 3, 4 ou 5
+  { id:'ban345', name:'Ni 3, ni 4, ni 5', explosive:false,
+    desc:"Le lancer est invalide s'il contient un 3, un 4 ou un 5.",
+    rule:(dice)=> !dice.some(d => d===3 || d===4 || d===5),
+    needsMinDice:1, sx:3, sy:0 },
+
+  // (4,0) 4/5 — BOMBE — valeurs interdites : 4 ou 5
+  { id:'ban45', name:'Ni 4, ni 5', explosive:false,
+    desc:"Le lancer est invalide s'il contient un 4 ou un 5.",
+    rule:(dice)=> !dice.some(d => d===4 || d===5),
+    needsMinDice:1, sx:4, sy:0 },
+
+  // (5,0) 10+ — EXPLOSION
+  { id:'sum10', name:'10 ou plus', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide si le total est de 10 ou plus.",
+    rule:(dice)=> sumDice(dice) < 10,
+    needsMinDice:1, sx:5, sy:0 },
+
+  // (6,0) ◼+1 — EXPLOSION — 2 valeurs consécutives
+  { id:'consec2exp', name:'2 valeurs consécutives', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient 2 valeurs consécutives.",
+    rule:(dice)=> !hasConsecutive(dice, 2),
+    needsMinDice:1, sx:6, sy:0 },
+
+  // ---------- Row 1 ----------
+  // (0,1) ◼+1+2 — EXPLOSION — 3 valeurs consécutives
+  { id:'consec3exp', name:'3 valeurs consécutives', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient 3 valeurs consécutives.",
+    rule:(dice)=> !hasConsecutive(dice, 3),
+    needsMinDice:1, sx:0, sy:1 },
+
+  // (1,1) ◼=◼ — EXPLOSION — 2 identiques
+  { id:'pairExp', name:'2 valeurs identiques', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient au moins 2 valeurs identiques.",
+    rule:(dice)=> !hasPair(dice),
+    needsMinDice:1, sx:1, sy:1 },
+
+  // (2,1) ◼≠◼≠◼ — EXPLOSION — 3 valeurs différentes
+  { id:'diff3exp', name:'3 valeurs différentes', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient au moins 3 valeurs différentes.",
+    rule:(dice)=>{ const s=new Set(dice); return s.size < 3; },
+    needsMinDice:1, sx:2, sy:1 },
+
+  // (3,1) 1/3/5 x3 — EXPLOSION — au moins 3 dés impairs (1, 3 ou 5)
+  { id:'odd3exp', name:'3 valeurs impaires', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient au moins 3 dés dont la valeur est 1, 3 ou 5.",
+    rule:(dice)=> dice.filter(d => d===1||d===3||d===5).length < 3,
+    needsMinDice:1, sx:3, sy:1 },
+
+  // (4,1) • (face 1) — EXPLOSION — contient un 1
+  { id:'has1exp', name:'Pas de 1', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient au moins un 1.",
+    rule:(dice)=> !dice.includes(1),
+    needsMinDice:1, sx:4, sy:1 },
+
+  // (6,1) 11+ — BOMBE
+  { id:'sum11', name:'11 ou plus', explosive:false,
+    desc:"Le lancer est invalide si le total est de 11 ou plus.",
+    rule:(dice)=> sumDice(dice) < 11,
+    needsMinDice:1, sx:6, sy:1 },
+
+  // ---------- Row 2 ----------
+  // (0,2) ◼+1 — BOMBE — 2 valeurs consécutives
+  { id:'consec2', name:'2 valeurs consécutives', explosive:false,
+    desc:"Le lancer est invalide s'il présente 2 valeurs consécutives.",
+    rule:(dice)=> !hasConsecutive(dice, 2),
+    needsMinDice:1, sx:0, sy:2 },
+
+  // (1,2) ◼=◼ — BOMBE — 2 identiques
+  { id:'pair', name:'2 valeurs identiques', explosive:false,
+    desc:"Le lancer est invalide s'il contient au moins 2 valeurs identiques.",
+    rule:(dice)=> !hasPair(dice),
+    needsMinDice:1, sx:1, sy:2 },
+
+  // (2,2) 1/3/5 x2 — BOMBE — au moins 2 dés impairs (1, 3 ou 5)
+  { id:'odd2', name:'2 valeurs impaires', explosive:false,
+    desc:"Le lancer est invalide s'il contient au moins 2 dés dont la valeur est 1, 3 ou 5.",
+    rule:(dice)=> dice.filter(d => d===1||d===3||d===5).length < 2,
+    needsMinDice:1, sx:2, sy:2 },
+
+  // (3,2) 13+ — EXPLOSION
+  { id:'sum13', name:'13 ou plus', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide si le total est de 13 ou plus.",
+    rule:(dice)=> sumDice(dice) < 13,
+    needsMinDice:1, sx:3, sy:2 },
+
+  // (4,2) Deux 5 — EXPLOSION
+  { id:'twoFives', name:'Deux 5 ou plus', explosive:true,
+    desc:"⚡ EXPLOSIVE — Le lancer est immédiatement invalide s'il contient deux 5 ou plus.",
+    rule:(dice)=> dice.filter(d=>d===5).length < 2,
+    needsMinDice:1, sx:4, sy:2 }
+];
+
+// ---------- Helpers pour les règles ----------
+// La face Boss = 6 : n'est PAS une valeur → filtrée avant toute règle
+// Ces helpers travaillent sur dés DÉJÀ filtrés (sans les 6)
+
+function sumDice(dice) {
+  // Somme des dés — ne compte pas les boss (car déjà filtrés)
+  return dice.reduce((a,b)=>a+b, 0);
+}
+
+function countOdds(dice) {
+  // Valeurs impaires = 1, 3, 5
+  return dice.filter(d => d % 2 === 1).length;
+}
+
+function hasPair(dice) {
+  // Au moins 2 valeurs identiques
+  const s = new Set(dice);
+  return s.size < dice.length;
+}
+
+function hasConsecutive(dice, k) {
+  // Vrai s'il y a k valeurs distinctes consécutives
+  if (dice.length < k) return false;
+  const sorted = [...new Set(dice)].sort((a,b)=>a-b);
+  for (let i = 0; i <= sorted.length - k; i++) {
+    let run = true;
+    for (let j = 1; j < k; j++) {
+      if (sorted[i+j] - sorted[i+j-1] !== 1) { run = false; break; }
+    }
+    if (run) return true;
+  }
+  return false;
+}
+
+// ------------ State ------------
+const MAX_ROLLS = 3; // 1 lancer initial + 2 relances
+
+// Helper pour créer un joueur dans l'état initial
+function makePlayer(name, isHuman) {
+  return {
+    name,
+    isHuman: !!isHuman,
+    dice: CONFIG.startDice,
+    tokens: CONFIG.startTokens,
+    chosen: 1,
+    score: null,
+    valid: true,
+    rolled: false,
+    history: [],
+    rollsUsed: 0,
+    currentValues: []
+  };
+}
+
+const state = {
+  round: 1,
+  currentPlayer: 0,
+  turnsThisRound: 0,
+  // Par défaut : 2 joueurs (humain + IA). Sera reconfiguré par startGameWithConfig.
+  players: [
+    makePlayer('Joueur 1', true),
+    makePlayer('Joueur 2 (IA)', false)
+  ],
+  currentCard: null,
+  phase: 'preRound', // preRound, choosing, rolling, rerolling, revealing, roundEnd, gameEnd
+  diceInPot: 0,
+  cardImage: null,
+  recentCardIds: [],         // ids des dernières cartes tirées (pour éviter répétitions exactes)
+  recentCategories: []       // catégories récentes (pour varier les types)
+};
+
+// Nombre actuel de joueurs (sera mis à jour selon la config du menu)
+function getPlayerCount() { return state.players.length; }
+
+/**
+ * Génère dynamiquement l'UI des panneaux joueurs (en haut à droite)
+ * et des tapis de jeu (au centre) selon state.players.
+ * Doit être appelée après modification de state.players.
+ *
+ * Crée pour chaque joueur i :
+ *   - <div class="player-card" id="panelP{i+1}">  (dans #playersPanel)
+ *   - <div class="mat-wrapper" id="matWrapperP{i+1}">  (dans #matsContainer)
+ *
+ * Garde les conventions d'IDs (panelP1, panelP2, ...) pour ne pas casser
+ * le code existant qui les référence par numéro.
+ */
+function buildPlayerUI() {
+  const panel = document.getElementById('playersPanel');
+  const matsContainer = document.getElementById('matsContainer');
+  if (!panel || !matsContainer) return;
+
+  panel.innerHTML = '';
+  matsContainer.innerHTML = '';
+
+  const n = getPlayerCount();
+  matsContainer.setAttribute('data-count', String(n));
+
+  for (let i = 0; i < n; i++) {
+    const p = state.players[i];
+    const idx = i + 1; // P1, P2, ...
+    const cls = `p${idx}`;
+
+    // ----- Player card (panneau en haut à droite) -----
+    const card = document.createElement('div');
+    card.className = 'player-card';
+    card.id = `panelP${idx}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = `player-avatar ${cls}`;
+    avatar.textContent = `P${idx}`;
+
+    const info = document.createElement('div');
+    info.className = 'player-info';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = `player-name ${cls}`;
+    nameEl.id = `nameP${idx}`;
+    nameEl.textContent = p.name;
+
+    const statsRow = document.createElement('div');
+    statsRow.className = 'player-stats-row';
+
+    // L'humain voit ses dés et jetons en clair, l'IA n'affiche que son score
+    if (p.isHuman) {
+      const dicePill = document.createElement('span');
+      dicePill.className = 'stat-pill dice-pill';
+      dicePill.innerHTML = `<span class="stat-icon">🎲</span><span id="diceP${idx}">${p.dice}</span>`;
+      statsRow.appendChild(dicePill);
+
+      const tokenPill = document.createElement('span');
+      tokenPill.className = 'stat-pill token-pill';
+      tokenPill.innerHTML = `<span class="stat-icon">🪙</span><span id="tokensP${idx}">${p.tokens}</span>`;
+      statsRow.appendChild(tokenPill);
+    }
+
+    const scorePill = document.createElement('span');
+    scorePill.className = 'stat-pill score-pill';
+    scorePill.id = `scoreBoxP${idx}`;
+    scorePill.innerHTML = `<span class="stat-icon">⭐</span><span id="scoreP${idx}">-</span>`;
+    statsRow.appendChild(scorePill);
+
+    info.appendChild(nameEl);
+    info.appendChild(statsRow);
+    card.appendChild(avatar);
+    card.appendChild(info);
+    panel.appendChild(card);
+
+    // ----- Mat wrapper (tapis de jeu) -----
+    const matWrap = document.createElement('div');
+    matWrap.className = 'mat-wrapper';
+    matWrap.id = `matWrapperP${idx}`;
+
+    const diceMat = document.createElement('div');
+    diceMat.className = 'dice-mat';
+
+    const matLabel = document.createElement('div');
+    matLabel.className = `mat-label ${cls}`;
+    matLabel.id = `matNameP${idx}`;
+    matLabel.textContent = `${p.name} : 0`;
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'dice-canvas';
+    canvas.id = `diceCanvasP${idx}`;
+
+    // Croix d'invalidation (croix.png plein tapis quand le lancer est invalidé)
+    const cross = document.createElement('div');
+    cross.className = 'invalid-cross';
+    cross.id = `crossP${idx}`;
+
+    const matScore = document.createElement('div');
+    matScore.className = 'mat-score';
+    matScore.id = `matScoreP${idx}`;
+
+    diceMat.appendChild(matLabel);
+    diceMat.appendChild(canvas);
+    diceMat.appendChild(cross);
+    diceMat.appendChild(matScore);
+    matWrap.appendChild(diceMat);
+    matsContainer.appendChild(matWrap);
+  }
+}
+
+// Catégorise une carte selon son id pour le tirage varié
+function categorizeCard(card) {
+  const id = card.id;
+  if (id.startsWith('sum')) return 'sum';
+  if (id.startsWith('diff')) return 'diff';
+  if (id.startsWith('pair')) return 'pair';
+  if (id.startsWith('consec')) return 'consec';
+  if (id.startsWith('odd')) return 'odd';
+  // Cartes "ban" et valeurs spécifiques (1, 5,5)
+  if (id.startsWith('ban') || id === 'has1exp' || id === 'twoFives') return 'ban';
+  return 'other';
+}
+
+/**
+ * Tirage intelligent de la prochaine carte :
+ * - jamais 2 fois la même carte d'affilée
+ * - évite de tirer la même catégorie que la dernière (sauf si impossible)
+ * - évite aussi les 2-3 catégories les plus récentes pour favoriser la variété
+ * - reste pondéré aléatoirement parmi les choix restants
+ */
+function pickNextCard() {
+  const allCards = CARDS;
+  const recentIds = state.recentCardIds || [];
+  const recentCats = state.recentCategories || [];
+
+  // 1. Exclure les cartes récemment tirées (les 2 dernières)
+  const lastIdsToAvoid = new Set(recentIds.slice(-2));
+
+  // 2. Catégories à éviter : les 2 dernières
+  const lastCatsToAvoid = new Set(recentCats.slice(-2));
+  // Catégories à fortement éviter : la toute dernière
+  const lastCat = recentCats[recentCats.length - 1];
+
+  // Filtrage progressif (du plus strict au plus permissif)
+  let pool;
+
+  // Niveau 1 : pas la même carte récente ET pas la même catégorie récente (2 dernières)
+  pool = allCards.filter(c =>
+    !lastIdsToAvoid.has(c.id) &&
+    !lastCatsToAvoid.has(categorizeCard(c))
+  );
+
+  // Niveau 2 (fallback) : juste éviter la dernière catégorie
+  if (pool.length === 0) {
+    pool = allCards.filter(c =>
+      !lastIdsToAvoid.has(c.id) &&
+      categorizeCard(c) !== lastCat
+    );
+  }
+
+  // Niveau 3 : juste éviter la dernière carte
+  if (pool.length === 0) {
+    pool = allCards.filter(c => !lastIdsToAvoid.has(c.id));
+  }
+
+  // Filet de sécurité (ne devrait jamais arriver)
+  if (pool.length === 0) pool = allCards;
+
+  // Tirage aléatoire dans le pool valide
+  const card = pool[Math.floor(Math.random() * pool.length)];
+
+  // Mémoriser pour les prochains tirages (garder les 3 derniers)
+  state.recentCardIds.push(card.id);
+  if (state.recentCardIds.length > 3) state.recentCardIds.shift();
+  state.recentCategories.push(categorizeCard(card));
+  if (state.recentCategories.length > 3) state.recentCategories.shift();
+
+  return card;
+}
+
+// ============================================================
+// SOUND SYSTEM - move.ogg joué à chaque action
+// ============================================================
+const SOUND_POOL_SIZE = 5;
+const soundPool = [];
+let soundPoolIdx = 0;
+let audioUnlocked = false;
+
+function initSounds() {
+  for (let i = 0; i < SOUND_POOL_SIZE; i++) {
+    const a = new Audio('son/move.ogg');
+    a.volume = 0.55;
+    a.preload = 'auto';
+    soundPool.push(a);
+  }
+}
+
+function playSound() {
+  if (soundPool.length === 0) return;
+  try {
+    const a = soundPool[soundPoolIdx];
+    soundPoolIdx = (soundPoolIdx + 1) % SOUND_POOL_SIZE;
+    a.currentTime = 0;
+    const p = a.play();
+    if (p && p.catch) p.catch(()=>{ /* autoplay bloqué avant interaction, on ignore */ });
+  } catch(e) { /* silent */ }
+}
+
+// Navigateurs bloquent l'autoplay tant que l'user n'a pas interagi.
+// Au premier clic n'importe où, on "déverrouille" en jouant un son silencieux.
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  for (const a of soundPool) {
+    const savedVol = a.volume;
+    a.volume = 0;
+    const p = a.play();
+    if (p && p.catch) p.catch(()=>{});
+    a.pause();
+    a.currentTime = 0;
+    a.volume = savedVol;
+  }
+}
+document.addEventListener('click', unlockAudio, { once: true, capture: true });
+document.addEventListener('keydown', unlockAudio, { once: true, capture: true });
+
+initSounds();
+
+// ============================================================
+// CANVAS 3D DICE RENDERER - tapis dynamiques (un par joueur, 2 à 4)
+// ============================================================
+let canvases = [];
+let ctxs = [];
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+/**
+ * Reconstruit les tableaux canvases et ctxs à partir des éléments DOM.
+ * À appeler après buildPlayerUI() qui a créé les <canvas> dans le DOM.
+ */
+function rebuildCanvases() {
+  canvases = [];
+  ctxs = [];
+  const n = getPlayerCount();
+  for (let i = 0; i < n; i++) {
+    const c = document.getElementById(`diceCanvasP${i+1}`);
+    if (!c) continue;
+    canvases.push(c);
+    ctxs.push(c.getContext('2d'));
+  }
+}
+
+function resizeCanvas() {
+  for (let i = 0; i < canvases.length; i++) {
+    const rect = canvases[i].getBoundingClientRect();
+    canvases[i].width = rect.width * DPR;
+    canvases[i].height = rect.height * DPR;
+    ctxs[i].setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+}
+window.addEventListener('resize', resizeCanvas);
+
+// --- Interaction : cliquer sur un dé pour le marquer à relancer ---
+// Uniquement sur le tapis du joueur 1 (l'humain)
+function getCanvasMousePos(canvas, evt) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (evt.clientX - rect.left),
+    y: (evt.clientY - rect.top)
+  };
+}
+
+// Index du joueur local (humain de cette fenêtre)
+// - En solo : toujours 0 (l'humain)
+// - En multi : multi.myPlayerIdx (qui est 0 si je suis hôte, 1+ si invité)
+function getMyPlayerIdx() {
+  if (multi.enabled) return multi.myPlayerIdx;
+  // Solo : trouver le premier humain (toujours 0 normalement)
+  for (let i = 0; i < state.players.length; i++) {
+    if (state.players[i].isHuman) return i;
+  }
+  return 0;
+}
+
+// Est-ce que l'humain LOCAL peut actuellement sélectionner des dés ?
+function canSelectDice() {
+  const myIdx = getMyPlayerIdx();
+  return state.phase === 'rerolling'
+      && state.currentPlayer === myIdx
+      && state.players[myIdx]
+      && state.players[myIdx].isHuman
+      && state.players[myIdx].rollsUsed < MAX_ROLLS;
+}
+
+/**
+ * Attache les listeners click/mousemove/mouseleave au canvas du joueur LOCAL.
+ * En solo : canvases[0]. En multi : canvases[multi.myPlayerIdx].
+ * À appeler après chaque rebuildCanvases().
+ */
+function attachHumanCanvasHandlers() {
+  const myIdx = getMyPlayerIdx();
+  const canvas = canvases[myIdx];
+  if (!canvas) return;
+
+  canvas.addEventListener('click', (e)=>{
+    if (!canSelectDice()) return;
+    const pos = getCanvasMousePos(canvas, e);
+    const scene = scenes[myIdx];
+    if (!scene) return;
+    // Chercher le dé cliqué (topmost d'abord = plus grand y)
+    const sorted = [...scene.dice].filter(d => d.state === 'rested')
+                                   .sort((a,b)=> b.y - a.y);
+    for (const d of sorted) {
+      if (d.containsPoint(pos.x, pos.y)) {
+        d.selectedForReroll = !d.selectedForReroll;
+        playSound();
+        updateRerollButtonLabel();
+        return;
+      }
+    }
+  });
+
+  canvas.addEventListener('mousemove', (e)=>{
+    const scene = scenes[myIdx];
+    if (!scene) return;
+    if (!canSelectDice()) {
+      for (const d of scene.dice) d.hoverState = false;
+      canvas.style.cursor = 'default';
+      return;
+    }
+    const pos = getCanvasMousePos(canvas, e);
+    let anyHover = false;
+    for (const d of scene.dice) d.hoverState = false;
+    const sorted = [...scene.dice].filter(d => d.state === 'rested')
+                                   .sort((a,b)=> b.y - a.y);
+    for (const d of sorted) {
+      if (d.containsPoint(pos.x, pos.y)) {
+        d.hoverState = true;
+        anyHover = true;
+        break;
+      }
+    }
+    canvas.style.cursor = anyHover ? 'pointer' : 'default';
+  });
+
+  canvas.addEventListener('mouseleave', ()=>{
+    const scene = scenes[myIdx];
+    if (!scene) return;
+    for (const d of scene.dice) d.hoverState = false;
+    canvas.style.cursor = 'default';
+  });
+}
+
+// --- 3D Die class with quaternion-like rotation ---
+class Die3D {
+  constructor(targetValue, index, total) {
+    this.value = targetValue;
+    this.size = 72;
+    // Start position - scattered from center top
+    this.x = 0; this.y = 0;
+    this.vx = 0; this.vy = 0;
+    // Final resting position
+    this.targetX = 0; this.targetY = 0;
+    this.index = index;
+    this.total = total;
+    // Euler angles
+    this.rx = Math.random()*Math.PI*2;
+    this.ry = Math.random()*Math.PI*2;
+    this.rz = Math.random()*Math.PI*2;
+    // Angular velocities
+    this.vrx = (Math.random()-0.5) * 0.5;
+    this.vry = (Math.random()-0.5) * 0.5;
+    this.vrz = (Math.random()-0.5) * 0.5;
+    // Lifecycle
+    this.state = 'idle'; // idle, rolling, settling, rested, appearing, repositioning, fadingOut
+    this.progress = 0;
+    this.settleStart = 0;
+    this.landSize = 38;
+    this.color = '#1a1a1a';
+    this.dotColor = '#fff';
+    this.shadowOffset = 6;
+    // Per-die visual properties
+    this.scale = 1;
+    this.opacity = 1;
+    this.shouldRemove = false;
+    // Sélection pour relance
+    this.selectedForReroll = false;
+    this.arrowAngle = 0; // Pour animation rotative des flèches
+    this.hoverState = false;
+  }
+
+  // Hit-test : est-ce que (mx, my) touche ce dé ?
+  containsPoint(mx, my) {
+    const s = this.size;
+    const pad = s * 0.8; // zone un peu plus large pour faciliter le clic
+    return Math.abs(mx - this.x) <= pad && Math.abs(my - this.y) <= pad;
+  }
+
+  start(cx, cy, tx, ty) {
+    // Entry position - fly in from top/side
+    const ang = Math.random()*Math.PI*2;
+    const r = 80 + Math.random()*40;
+    this.x = cx + Math.cos(ang)*r;
+    this.y = cy - 120 - Math.random()*80;
+    this.targetX = tx;
+    this.targetY = ty;
+    this.vx = (tx - this.x) * 0.02 + (Math.random()-0.5)*3;
+    this.vy = -3 + Math.random()*2;
+    this.state = 'rolling';
+    this.progress = 0;
+    this.rollDuration = 60 + Math.floor(Math.random()*30); // ~1 second at 60fps
+    this.vrx = (Math.random()-0.5) * 0.6;
+    this.vry = (Math.random()-0.5) * 0.6;
+    this.vrz = (Math.random()-0.5) * 0.5;
+
+  }
+
+  // Apparition en fade-in + scale-up, déjà au repos
+  appearAt(tx, ty) {
+    this.x = tx;
+    this.y = ty;
+    this.targetX = tx;
+    this.targetY = ty;
+    // Angles finaux pour la valeur
+    [this.rx, this.ry, this.rz] = this.anglesForValue(this.value);
+    this.state = 'appearing';
+    this.appearProgress = 0;
+    this.scale = 0;
+    this.opacity = 0;
+  }
+
+  // Repositionner (glissement doux) un dé déjà au repos
+  repositionTo(tx, ty) {
+    if (this.state !== 'rested') return;
+    this.startX = this.x;
+    this.startY = this.y;
+    this.targetX = tx;
+    this.targetY = ty;
+    this.state = 'repositioning';
+    this.repoProgress = 0;
+    this.repoDuration = 16; // ~250ms
+  }
+
+  update(dt) {
+    // Animation des flèches de reroll (rotation continue)
+    if (this.selectedForReroll) {
+      this.arrowAngle += 0.08 * dt;
+      if (this.arrowAngle > Math.PI*2) this.arrowAngle -= Math.PI*2;
+    }
+
+    if (this.state === 'rolling') {
+      this.progress++;
+      // Motion
+      const t = this.progress / this.rollDuration;
+      // Ease toward target
+      this.vx += (this.targetX - this.x) * 0.008;
+      this.vy += 0.35; // gravity-like
+      this.vx *= 0.96;
+      this.vy *= 0.97;
+      this.x += this.vx;
+      this.y += this.vy;
+      // If passing target Y, bounce
+      if (this.y > this.targetY && this.vy > 0) {
+        this.y = this.targetY;
+        this.vy *= -0.4;
+        this.vx *= 0.7;
+        if (Math.abs(this.vy) < 1) this.vy = 0;
+      }
+      this.rx += this.vrx;
+      this.ry += this.vry;
+      this.rz += this.vrz;
+      // Damping
+      this.vrx *= 0.985;
+      this.vry *= 0.985;
+      this.vrz *= 0.98;
+
+      if (this.progress >= this.rollDuration) {
+        this.state = 'settling';
+        this.settleStart = 0;
+        // Snapshot current angles
+        this.startRx = this.rx;
+        this.startRy = this.ry;
+        this.startRz = this.rz;
+        // Compute final angles to show face
+        [this.finalRx, this.finalRy, this.finalRz] = this.anglesForValue(this.value);
+        this.startX = this.x; this.startY = this.y;
+      }
+    } else if (this.state === 'settling') {
+      this.settleStart++;
+      const dur = 24;
+      let t = Math.min(this.settleStart / dur, 1);
+      // easeOutBack
+      const c1 = 1.70158, c3 = c1 + 1;
+      const eased = 1 + c3 * Math.pow(t-1,3) + c1 * Math.pow(t-1,2);
+
+      this.x = this.startX + (this.targetX - this.startX) * eased;
+      this.y = this.startY + (this.targetY - this.startY) * eased;
+
+      // Shortest path angular interpolation
+      this.rx = lerpAngle(this.startRx, this.finalRx, t);
+      this.ry = lerpAngle(this.startRy, this.finalRy, t);
+      this.rz = lerpAngle(this.startRz, this.finalRz, t);
+
+      if (t >= 1) {
+        this.state = 'rested';
+        this.x = this.targetX; this.y = this.targetY;
+        this.rx = this.finalRx; this.ry = this.finalRy; this.rz = this.finalRz;
+      }
+    } else if (this.state === 'appearing') {
+      this.appearProgress++;
+      const dur = 16; // ~250ms à 60fps
+      const t = Math.min(this.appearProgress / dur, 1);
+      // easeOutBack pour un petit rebond
+      const c1 = 1.70158, c3 = c1 + 1;
+      const eased = 1 + c3 * Math.pow(t-1,3) + c1 * Math.pow(t-1,2);
+      this.scale = eased;
+      this.opacity = Math.min(1, t*1.5);
+      if (t >= 1) {
+        this.state = 'rested';
+        this.scale = 1;
+        this.opacity = 1;
+      }
+    } else if (this.state === 'repositioning') {
+      this.repoProgress++;
+      const t = Math.min(this.repoProgress / this.repoDuration, 1);
+      // easeOutCubic
+      const eased = 1 - Math.pow(1-t, 3);
+      this.x = this.startX + (this.targetX - this.startX) * eased;
+      this.y = this.startY + (this.targetY - this.startY) * eased;
+      if (t >= 1) {
+        this.state = 'rested';
+        this.x = this.targetX;
+        this.y = this.targetY;
+      }
+    } else if (this.state === 'fadingOut') {
+      if (this.fadeProgress === undefined) this.fadeProgress = 0;
+      this.fadeProgress++;
+      const dur = 12;
+      const t = Math.min(this.fadeProgress / dur, 1);
+      this.opacity = 1 - t;
+      this.scale = 1 - t * 0.4;
+      if (t >= 1) {
+        this.shouldRemove = true;
+      }
+    }
+  }
+
+  // Predefined camera-facing angles for each value (1..6)
+  anglesForValue(v) {
+    const table = {
+      1:[0, 0, 0],
+      2:[-Math.PI/2, 0, 0],
+      3:[0, -Math.PI/2, 0],
+      4:[0, Math.PI/2, 0],
+      5:[Math.PI/2, 0, 0],
+      6:[Math.PI, 0, 0]
+    };
+    return table[v] || [0,0,0];
+  }
+
+  draw(ctx) {
+    // Appliquer scale et opacity au niveau ctx
+    const needsTransform = this.scale !== 1 || this.opacity !== 1;
+    if (needsTransform) {
+      ctx.save();
+      ctx.globalAlpha = this.opacity;
+      // Scale autour du centre du dé (this.x, this.y)
+      if (this.scale !== 1) {
+        ctx.translate(this.x, this.y);
+        ctx.scale(this.scale, this.scale);
+        ctx.translate(-this.x, -this.y);
+      }
+    }
+    // Halo au survol uniquement (subtle)
+    if (this.hoverState && this.state === 'rested' && !this.selectedForReroll) {
+      ctx.save();
+      const r = this.size * 0.65;
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    this._drawInternal(ctx);
+
+    // Flèches rotatives FIXES sur les dés sélectionnés pour reroll
+    if (this.selectedForReroll && this.state === 'rested') {
+      this._drawRerollArrows(ctx);
+    }
+
+    if (needsTransform) {
+      ctx.restore();
+    }
+  }
+
+  _drawRerollArrows(ctx) {
+    const cx = this.x;
+    const cy = this.y;
+    const r = this.size * 0.62;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    // Pas de rotation : flèches FIXES
+
+    // Deux flèches courbes opposées (en forme de ↻ double / cycle)
+    ctx.lineWidth = 4.5;
+    ctx.strokeStyle = '#ffcc55';
+    ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 5;
+
+    // Arc 1 (haut-droit) — partant du haut, allant vers la droite-bas
+    ctx.beginPath();
+    ctx.arc(0, 0, r, -Math.PI*0.85, -Math.PI*0.15, false);
+    ctx.stroke();
+    // Pointe de flèche à l'extrémité de l'arc 1
+    const ax1 = Math.cos(-Math.PI*0.15) * r;
+    const ay1 = Math.sin(-Math.PI*0.15) * r;
+    const tan1 = -Math.PI*0.15 + Math.PI/2;
+    this._drawArrowhead(ctx, ax1, ay1, tan1, 9);
+
+    // Arc 2 (bas-gauche) — partant du bas, allant vers la gauche-haut
+    ctx.beginPath();
+    ctx.arc(0, 0, r, Math.PI*0.15, Math.PI*0.85, false);
+    ctx.stroke();
+    // Pointe de flèche à l'extrémité de l'arc 2
+    const ax2 = Math.cos(Math.PI*0.85) * r;
+    const ay2 = Math.sin(Math.PI*0.85) * r;
+    const tan2 = Math.PI*0.85 + Math.PI/2;
+    this._drawArrowhead(ctx, ax2, ay2, tan2, 9);
+
+    ctx.restore();
+  }
+
+  _drawArrowhead(ctx, x, y, angle, size) {
+    // Triangle plein pour la flèche
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#ffcc55';
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(-size*0.8, size*0.5);
+    ctx.lineTo(size*0.8, size*0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawInternal(ctx) {
+    const s = this.size;
+    const half = s / 2;
+
+    // Gérer le changement de face (fréquence qui ralentit)
+    let displayValue = this.value;
+    if (this.state === 'rolling') {
+      const t = this.progress / this.rollDuration;
+      if (this._faceChangeCounter === undefined) this._faceChangeCounter = 0;
+      if (this._faceChangeTick === undefined) this._faceChangeTick = 0;
+      const interval = Math.max(3, Math.floor(3 + t * t * 12));
+      this._faceChangeTick++;
+      if (this._faceChangeTick >= interval) {
+        this._faceChangeCounter++;
+        this._faceChangeTick = 0;
+      }
+      displayValue = 1 + (this._faceChangeCounter % 6);
+    } else if (this.state === 'settling') {
+      const t = this.settleStart / 24;
+      if (t > 0.6) {
+        displayValue = this.value;
+      } else {
+        if (this._faceChangeTick === undefined) this._faceChangeTick = 0;
+        this._faceChangeTick++;
+        if (this._faceChangeTick >= 12) {
+          this._faceChangeCounter = (this._faceChangeCounter || 0) + 1;
+          this._faceChangeTick = 0;
+        }
+        displayValue = 1 + ((this._faceChangeCounter || 0) % 6);
+      }
+    }
+
+    // Ombre portée au sol (dans tous les cas)
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y + s * 0.55, s * 0.55, s * 0.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Si le dé est en mouvement (rolling/settling/appearing/repositioning) → rendu 3D
+    // Sinon (rested) → rendu 2D plat (style BGA épuré)
+    const is3DMode = this.state === 'rolling' || this.state === 'settling';
+
+    if (is3DMode) {
+      this._draw3DCube(ctx, displayValue);
+    } else {
+      this._draw2DFlat(ctx, displayValue);
+    }
+  }
+
+  // ---------- Rendu 2D plat (dé au repos ou en preview) ----------
+  _draw2DFlat(ctx, displayValue) {
+    const s = this.size;
+    const half = s / 2;
+    const x = this.x - half;
+    const y = this.y - half;
+    const r = 6;
+
+    ctx.save();
+
+    // Fond du dé
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+    this._drawRoundedRect(ctx, x, y, s, s, r);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    // Inner highlight
+    ctx.save();
+    ctx.globalAlpha = 0.08;
+    const grad = ctx.createLinearGradient(x, y, x, y + s);
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(0.3, '#fff');
+    grad.addColorStop(0.5, 'transparent');
+    ctx.fillStyle = grad;
+    this._drawRoundedRect(ctx, x + 2, y + 2, s - 4, s - 4, r - 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Bordure
+    if (this.selectedForReroll && this.state === 'rested') {
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 3;
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 1;
+    }
+    this._drawRoundedRect(ctx, x, y, s, s, r);
+    ctx.stroke();
+
+    // Pips de la face visible
+    this._draw2DFace(ctx, displayValue);
+
+    ctx.restore();
+  }
+
+  // ---------- Rendu 3D cube (pendant le lancer) ----------
+  _draw3DCube(ctx, displayValue) {
+    const s = this.size;
+    const half = s / 2;
+
+    // 8 sommets du cube
+    const verts = [
+      [-half,-half,-half], [ half,-half,-half], [ half, half,-half], [-half, half,-half],
+      [-half,-half, half], [ half,-half, half], [ half, half, half], [-half, half, half]
+    ];
+
+    // 6 faces avec valeurs (mapping standard du dé : faces opposées = 7)
+    //   1 ↔ 6, 2 ↔ 5, 3 ↔ 4
+    // La face 1 est devant (z+), on attribue displayValue à cette face
+    // et les autres valeurs complémentaires aux autres faces.
+    const v = displayValue;
+    const opp = 7 - v;
+    // Les faces latérales prennent les 4 valeurs restantes. On les fait tourner
+    // pour que le cube soit "cohérent" peu importe la valeur affichée.
+    const side1 = ((v) % 6) + 1;
+    const side2 = 7 - side1;
+    const side3 = ((v + 1) % 6) + 1;
+    const side4 = 7 - side3;
+    // S'assurer que side1..4 ne sont ni v ni opp
+    const used = new Set([v, opp]);
+    const pool = [1,2,3,4,5,6].filter(x=>!used.has(x));
+    const faces = [
+      { idx:[4,5,6,7], value:v,       nx:0, ny:0, nz:1  },   // front
+      { idx:[1,0,3,2], value:opp,     nx:0, ny:0, nz:-1 },  // back
+      { idx:[0,1,5,4], value:pool[0], nx:0, ny:-1, nz:0 }, // top
+      { idx:[3,7,6,2], value:7-pool[0], nx:0, ny:1, nz:0 }, // bottom
+      { idx:[1,2,6,5], value:pool[1], nx:1, ny:0, nz:0 },  // right
+      { idx:[0,4,7,3], value:7-pool[1], nx:-1, ny:0, nz:0 } // left
+    ];
+
+    // Rotation matrices
+    const cosX = Math.cos(this.rx), sinX = Math.sin(this.rx);
+    const cosY = Math.cos(this.ry), sinY = Math.sin(this.ry);
+    const cosZ = Math.cos(this.rz), sinZ = Math.sin(this.rz);
+
+    const rotate = (x, y, z) => {
+      // X axis
+      let y1 = y * cosX - z * sinX;
+      let z1 = y * sinX + z * cosX;
+      let x1 = x;
+      // Y axis
+      let x2 = x1 * cosY + z1 * sinY;
+      let z2 = -x1 * sinY + z1 * cosY;
+      let y2 = y1;
+      // Z axis
+      let x3 = x2 * cosZ - y2 * sinZ;
+      let y3 = x2 * sinZ + y2 * cosZ;
+      let z3 = z2;
+      return [x3, y3, z3];
+    };
+
+    // Projeter sommets avec petite perspective
+    const projected = verts.map(([x, y, z]) => {
+      const [rx, ry, rz] = rotate(x, y, z);
+      const persp = 1 + rz / 400;
+      return [this.x + rx * persp, this.y + ry * persp, rz];
+    });
+
+    // Rotation des normales pour calcul visibilité & éclairage
+    const facesData = faces.map(f => {
+      const [nxr, nyr, nzr] = rotate(f.nx, f.ny, f.nz);
+      const zc = f.idx.reduce((sum, i) => sum + projected[i][2], 0) / 4;
+      return { ...f, nxr, nyr, nzr, zc };
+    });
+
+    // Tri painter's : dessiner les faces de l'arrière vers l'avant
+    facesData.sort((a, b) => a.zc - b.zc);
+
+    for (const f of facesData) {
+      // Back-face culling (face tournée vers l'arrière)
+      if (f.nzr < -0.02) continue;
+
+      const pts = f.idx.map(i => projected[i]);
+
+      // Éclairage : produit scalaire normale · direction lumière (du haut-front)
+      const lx = 0.2, ly = -0.5, lz = 0.9;
+      const lmag = Math.sqrt(lx*lx + ly*ly + lz*lz);
+      let dot = (f.nxr*lx + f.nyr*ly + f.nzr*lz) / lmag;
+      // On garde dot dans [0,1] et on conserve son signe pour différencier
+      // face éclairée (positif) et face dans l'ombre (négatif).
+      // Mais on reste très subtil pour rester dans les NOIRS.
+      const lit = Math.max(0, dot); // intensité de lumière directe [0,1]
+
+      // Shade : noir pur → noir très légèrement rehaussé
+      // À dot=0 (face perpendiculaire à la lumière) : rgb(0,0,0)
+      // À dot=1 (face pile face à la lumière)       : rgb(22,22,22)
+      const shade = Math.floor(lit * 22);
+      const fill = `rgb(${shade},${shade},${shade})`;
+
+      // Dessin de la face (quad plein)
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      // Highlight plastique sur les faces éclairées (comme sur le dé 2D au repos)
+      // Dégradé blanc très léger du haut vers le milieu de la face
+      if (lit > 0.3) {
+        const ys = pts.map(p => p[1]);
+        const yMin = Math.min(...ys);
+        const yMax = Math.max(...ys);
+        const hg = ctx.createLinearGradient(0, yMin, 0, yMax);
+        hg.addColorStop(0, `rgba(255,255,255,${0.08 * lit})`);
+        hg.addColorStop(0.35, `rgba(255,255,255,${0.04 * lit})`);
+        hg.addColorStop(0.6, 'rgba(255,255,255,0)');
+        ctx.fillStyle = hg;
+        ctx.fill();
+      }
+
+      // Arête très fine et subtile (presque invisible, juste pour la séparation)
+      ctx.strokeStyle = `rgba(255,255,255,${0.08 + lit * 0.12})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+
+      // Pips de la face — seulement si la face est suffisamment orientée vers nous
+      if (f.nzr > 0.25) {
+        this._drawPipsOnProjectedQuad(ctx, pts, f.value, lit);
+      }
+    }
+  }
+
+  // Dessine les pips (ou boss) sur une face 3D projetée (quadrilatère)
+  _drawPipsOnProjectedQuad(ctx, pts, value, shade) {
+    // Mapping bilinéaire entre (u,v)∈[0,1]² et les 4 coins du quad
+    const mapPoint = (u, v) => {
+      const x = (1-u)*(1-v)*pts[0][0] + u*(1-v)*pts[1][0] + u*v*pts[2][0] + (1-u)*v*pts[3][0];
+      const y = (1-u)*(1-v)*pts[0][1] + u*(1-v)*pts[1][1] + u*v*pts[2][1] + (1-u)*v*pts[3][1];
+      return [x, y];
+    };
+
+    // Taille de la face projetée (pour échelle des pips)
+    const d1 = Math.hypot(pts[1][0]-pts[0][0], pts[1][1]-pts[0][1]);
+    const d2 = Math.hypot(pts[2][0]-pts[1][0], pts[2][1]-pts[1][1]);
+    const faceSize = (d1 + d2) / 2;
+
+    // Face boss (6) : image au centre
+    if (value === 6) {
+      if (bossImgLoaded) {
+        const [cx, cy] = mapPoint(0.5, 0.5);
+        const imgSize = faceSize * 0.7;
+        ctx.save();
+        ctx.globalAlpha = 0.7 + shade * 0.3;
+        ctx.drawImage(bossImg, cx - imgSize/2, cy - imgSize/2, imgSize, imgSize);
+        ctx.restore();
+      } else {
+        const [cx, cy] = mapPoint(0.5, 0.5);
+        ctx.save();
+        ctx.fillStyle = `rgba(255,255,255,${0.7 + shade * 0.3})`;
+        ctx.font = `bold ${faceSize * 0.5}px Impact, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('B', cx, cy);
+        ctx.restore();
+      }
+      return;
+    }
+
+    // Positions des pips en coordonnées unitaires de la face
+    const pipMap = {
+      1: [[0.5, 0.5]],
+      2: [[0.28, 0.28], [0.72, 0.72]],
+      3: [[0.25, 0.25], [0.5, 0.5], [0.75, 0.75]],
+      4: [[0.28, 0.28], [0.72, 0.28], [0.28, 0.72], [0.72, 0.72]],
+      5: [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]]
+    };
+
+    const pips = pipMap[value] || [];
+    const pipR = faceSize * 0.085;
+    // Pips toujours bien opaques (comme dans le rendu 2D au repos)
+    // On réduit juste très légèrement la luminosité sur faces peu éclairées
+    const pipAlpha = 0.9 + shade * 0.1;
+
+    for (const [u, v] of pips) {
+      const [px, py] = mapPoint(u, v);
+      // Dégradé radial sur le pip pour effet plastique — même aspect que le 2D
+      const g = ctx.createRadialGradient(
+        px - pipR*0.3, py - pipR*0.3, pipR*0.1,
+        px, py, pipR
+      );
+      // Blanc en haut-gauche, blanc cassé au centre, gris en bas-droite
+      g.addColorStop(0, `rgba(255,255,255,${pipAlpha})`);
+      g.addColorStop(0.7, `rgba(238,238,238,${pipAlpha})`);
+      g.addColorStop(1, `rgba(153,153,153,${pipAlpha})`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, pipR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Helper : rectangle arrondi
+  _drawRoundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  // Dessine une face 2D plate (1-5 en pips, 6 en boss)
+  _draw2DFace(ctx, value) {
+    const s = this.size;
+    const half = s / 2;
+    const cx = this.x;
+    const cy = this.y;
+
+    // Face Boss (6) : image ou fallback
+    if (value === 6) {
+      if (bossImgLoaded) {
+        const imgSize = s * 0.75;
+        ctx.drawImage(bossImg, cx - imgSize/2, cy - imgSize/2, imgSize, imgSize);
+      } else {
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${s * 0.55}px Impact, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('B', cx, cy);
+      }
+      return;
+    }
+
+    // Positions des pips dans une grille 3x3 centrée sur le dé
+    // en coords relatives [-0.5, 0.5]
+    const pipLayout = {
+      1: [[0, 0]],
+      2: [[-0.25, -0.25], [0.25, 0.25]],
+      3: [[-0.28, -0.28], [0, 0], [0.28, 0.28]],
+      4: [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]],
+      5: [[-0.28, -0.28], [0.28, -0.28], [0, 0], [-0.28, 0.28], [0.28, 0.28]]
+    };
+
+    const pips = pipLayout[value] || [];
+    const pipR = s * 0.09;
+
+    for (const [u, v] of pips) {
+      const px = cx + u * s;
+      const py = cy + v * s;
+      // Petit dégradé sur chaque pip pour le relief
+      const g = ctx.createRadialGradient(px - pipR * 0.3, py - pipR * 0.3, pipR * 0.1, px, py, pipR);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(0.7, '#eee');
+      g.addColorStop(1, '#999');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, pipR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Ancienne méthode drawPips conservée pour compatibilité (inutilisée désormais)
+  drawPips(ctx, pts, value, shade) {
+    // no-op, remplacée par _draw2DFace
+  }
+}
+
+function lerpAngle(a, b, t) {
+  // Shortest path lerp between angles
+  let diff = b - a;
+  // We want to keep rotation feel dynamic but end accurate; just lerp directly
+  // with optional snap via normalization - but since b might be offset a lot,
+  // choose the nearest multiple of 2π to a.
+  const twoPi = Math.PI*2;
+  while (diff > Math.PI) diff -= twoPi;
+  while (diff < -Math.PI) diff += twoPi;
+  return a + diff * t;
+}
+
+// ============================================================
+// Roll Scene State
+// ============================================================
+// Une scène indépendante par joueur (2 à 4)
+let scenes = [];
+function rebuildScenes() {
+  scenes = [];
+  const n = getPlayerCount();
+  for (let i = 0; i < n; i++) {
+    scenes.push({ dice: [], rolling: false, onComplete: null });
+  }
+}
+let lastFrameTime = 0;
+
+// ============================================================
+// Fly Scene : canvas overlay plein écran pour animer les dés
+// volant des tapis vers la carte du joueur gagnant
+// ============================================================
+const flyCanvas = document.getElementById('flyCanvas');
+const flyCtx = flyCanvas.getContext('2d');
+const flyScene = {
+  dice: [],
+  active: false,
+  onComplete: null
+};
+
+function resizeFlyCanvas() {
+  flyCanvas.width = window.innerWidth * DPR;
+  flyCanvas.height = window.innerHeight * DPR;
+  flyCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resizeFlyCanvas);
+
+/**
+ * Lance l'animation de vol : tous les dés des deux tapis s'envolent
+ * vers la zone du joueur gagnant (carte en haut à droite)
+ * winnerIdx : 0 (P1) ou 1 (P2). Si -1 → pas d'animation.
+ */
+function flyDiceToWinner(winnerIdx, onComplete) {
+  if (winnerIdx < 0) { onComplete && onComplete(); return; }
+
+  resizeFlyCanvas();
+  flyCanvas.classList.add('active');
+
+  // Cible : centre de la carte joueur du gagnant (résolu dynamiquement par ID)
+  const targetCard = document.getElementById(`panelP${winnerIdx + 1}`);
+  if (!targetCard) { onComplete && onComplete(); return; }
+  const targetRect = targetCard.getBoundingClientRect();
+  const targetX = targetRect.left + targetRect.width * 0.3;
+  const targetY = targetRect.top + targetRect.height / 2;
+
+  // Collecter tous les dés de TOUTES les scènes (N joueurs)
+  const flyDice = [];
+  const nScenes = scenes.length;
+  for (let idx = 0; idx < nScenes; idx++) {
+    const scene = scenes[idx];
+    const canvas = canvases[idx];
+    if (!scene || !canvas) continue;
+    const rect = canvas.getBoundingClientRect();
+    for (const d of scene.dice) {
+      if (d.state === 'rested' || d.state === 'repositioning' || d.state === 'appearing') {
+        const fd = new FlyingDie(d.value, rect.left + d.x, rect.top + d.y, targetX, targetY);
+        fd.rx = d.rx;
+        fd.ry = d.ry;
+        fd.rz = d.rz;
+        flyDice.push(fd);
+      }
+    }
+    // Vider la scène d'origine
+    scene.dice = [];
+    scene.savedTargets = null;
+  }
+
+  if (flyDice.length === 0) {
+    flyCanvas.classList.remove('active');
+    onComplete && onComplete();
+    return;
+  }
+
+  flyDice.forEach((d, i) => { d.startDelay = i * 3; });
+
+  flyScene.dice = flyDice;
+  flyScene.active = true;
+  flyScene.onComplete = onComplete;
+  flyScene.targetX = targetX;
+  flyScene.targetY = targetY;
+  flyScene.targetIdx = winnerIdx;
+  flyScene.startTime = performance.now();
+}
+
+// Dé volant : similaire à Die3D mais avec trajectoire paramétrique courbe
+class FlyingDie {
+  constructor(value, startX, startY, targetX, targetY) {
+    this.value = value;
+    this.size = 72;
+    this.startX = startX; this.startY = startY;
+    this.x = startX; this.y = startY;
+    this.targetX = targetX; this.targetY = targetY;
+    this.progress = 0;
+    this.duration = 55 + Math.floor(Math.random()*20); // ~1s à 60fps
+    this.startDelay = 0;
+    // Courbe : point de contrôle légèrement surélevé
+    const midX = (startX + targetX) / 2;
+    const midY = (startY + targetY) / 2;
+    const dx = targetX - startX;
+    const dy = targetY - startY;
+    const dist = Math.hypot(dx, dy);
+    // Normale perpendiculaire à la trajectoire
+    const nx = -dy / (dist || 1);
+    const ny = dx / (dist || 1);
+    // Arc vers le haut, amplitude proportionnelle à la distance
+    const arcHeight = dist * 0.25 + 50;
+    this.ctrlX = midX + nx * arcHeight * (ny < 0 ? 1 : -1);
+    this.ctrlY = midY + ny * arcHeight * (ny < 0 ? 1 : -1) - arcHeight * 0.3;
+    // Rotation en vol
+    this.rx = Math.random()*Math.PI*2;
+    this.ry = Math.random()*Math.PI*2;
+    this.rz = Math.random()*Math.PI*2;
+    this.vrx = (Math.random()-0.5) * 0.4 + 0.15;
+    this.vry = (Math.random()-0.5) * 0.4 + 0.1;
+    this.vrz = (Math.random()-0.5) * 0.3;
+    this.scale = 1;
+    this.opacity = 1;
+    this.done = false;
+    this.absorbed = false;
+    this.trail = []; // mini traînée visuelle
+  }
+
+  update(dt) {
+    if (this.done) return;
+    if (this.startDelay > 0) {
+      this.startDelay -= dt;
+      return;
+    }
+    this.progress += dt;
+    const t = Math.min(this.progress / this.duration, 1);
+
+    // Courbe de Bézier quadratique : (1-t)²P0 + 2(1-t)tC + t²P1
+    const u = 1 - t;
+    this.x = u*u * this.startX + 2*u*t * this.ctrlX + t*t * this.targetX;
+    this.y = u*u * this.startY + 2*u*t * this.ctrlY + t*t * this.targetY;
+
+    // Rotation
+    this.rx += this.vrx * dt;
+    this.ry += this.vry * dt;
+    this.rz += this.vrz * dt;
+
+    // Scale down progressif à l'approche de la cible
+    if (t > 0.7) {
+      const st = (t - 0.7) / 0.3;
+      this.scale = 1 - st * 0.6;
+      this.opacity = 1 - st * 0.3;
+    }
+
+    // Traînée : garder positions récentes
+    if (this.progress % 2 < dt) {
+      this.trail.push({ x: this.x, y: this.y, age: 0 });
+      if (this.trail.length > 6) this.trail.shift();
+    }
+    for (const p of this.trail) p.age += dt;
+
+    if (t >= 1) {
+      this.done = true;
+      this.absorbed = true;
+    }
+  }
+
+  draw(ctx) {
+    if (this.startDelay > 0) return;
+
+    // Traînée
+    for (let i = 0; i < this.trail.length; i++) {
+      const p = this.trail[i];
+      const a = (1 - p.age / 12) * (i / this.trail.length) * 0.6;
+      if (a <= 0) continue;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#ffcc55';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, this.size * 0.25 * (i / this.trail.length + 0.3), 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Le dé lui-même (rendu simplifié, on réutilise le renderer de Die3D)
+    ctx.save();
+    ctx.globalAlpha = this.opacity;
+    if (this.scale !== 1) {
+      ctx.translate(this.x, this.y);
+      ctx.scale(this.scale, this.scale);
+      ctx.translate(-this.x, -this.y);
+    }
+    // Utilise une instance temporaire pour le rendu
+    if (!this._renderer) {
+      this._renderer = new Die3D(this.value, 0, 1);
+      this._renderer.size = this.size;
+    }
+    this._renderer.x = this.x;
+    this._renderer.y = this.y;
+    this._renderer.rx = this.rx;
+    this._renderer.ry = this.ry;
+    this._renderer.rz = this.rz;
+    this._renderer._drawInternal(ctx);
+    ctx.restore();
+  }
+}
+
+function animateFlyScene(ts) {
+  if (!flyScene.active) return;
+  const rect = { width: window.innerWidth, height: window.innerHeight };
+  flyCtx.clearRect(0, 0, rect.width, rect.height);
+
+  let allDone = true;
+  for (const d of flyScene.dice) {
+    d.update(1);
+    d.draw(flyCtx);
+    if (!d.done) allDone = false;
+  }
+
+  // Quand un dé arrive, pulser la carte du joueur
+  const justAbsorbed = flyScene.dice.some(d => d.absorbed);
+  if (justAbsorbed) {
+    const targetCard = document.getElementById(`panelP${flyScene.targetIdx + 1}`);
+    if (targetCard && !targetCard.classList.contains('receiving')) {
+      targetCard.classList.add('receiving');
+      setTimeout(()=> targetCard.classList.remove('receiving'), 400);
+    }
+    // Consommer le flag
+    for (const d of flyScene.dice) if (d.absorbed) d.absorbed = false;
+  }
+
+  if (allDone) {
+    flyScene.active = false;
+    flyScene.dice = [];
+    flyCanvas.classList.remove('active');
+    flyCtx.clearRect(0, 0, rect.width, rect.height);
+    if (flyScene.onComplete) {
+      const cb = flyScene.onComplete;
+      flyScene.onComplete = null;
+      cb();
+    }
+    return;
+  }
+  requestAnimationFrame(animateFlyScene);
+}
+
+function layoutTargets(playerIdx, n) {
+  // Return target (x,y) positions within the player's canvas (centered)
+  const rect = canvases[playerIdx].getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2 + 10;
+  // Spacing adapté à la nouvelle taille des dés (72px) + un peu de marge
+  const spacing = Math.min(82, rect.width / (Math.min(n,4)+1.2));
+  const cols = Math.min(n, 4);
+  const rows = Math.ceil(n / cols);
+  const targets = [];
+  for (let i=0;i<n;i++) {
+    const col = i % cols;
+    const row = Math.floor(i/cols);
+    const tx = cx + (col - (cols-1)/2)*spacing + (Math.random()-0.5)*8;
+    const ty = cy + (row - (rows-1)/2)*spacing + (Math.random()-0.5)*8;
+    targets.push([tx,ty]);
+  }
+  return { cx, cy, targets };
+}
+
+function startRoll(playerIdx, values, onComplete) {
+  resizeCanvas();
+  const scene = scenes[playerIdx];
+
+  // Si on a des positions sauvegardées (preview), les réutiliser
+  let targets;
+  if (scene.savedTargets && scene.savedTargets.length === values.length) {
+    targets = scene.savedTargets;
+  } else {
+    const layout = layoutTargets(playerIdx, values.length);
+    targets = layout.targets;
+    scene.savedTargets = targets;
+  }
+
+  const rect = canvases[playerIdx].getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2 + 10;
+
+  scene.dice = values.map((v,i) => {
+    const d = new Die3D(v, i, values.length);
+    d.start(cx, cy, targets[i][0], targets[i][1]);
+    return d;
+  });
+  scene.rolling = true;
+  scene.onComplete = onComplete;
+}
+
+function clearDice(playerIdx) {
+  if (playerIdx === undefined) {
+    for (const scene of scenes) {
+      scene.dice = [];
+      scene.savedTargets = null;
+    }
+  } else if (scenes[playerIdx]) {
+    scenes[playerIdx].dice = [];
+    scenes[playerIdx].savedTargets = null;
+  }
+}
+
+// Preview: place/retire des dés au repos en direct (pour feedback visuel lors du choix)
+function previewDice(playerIdx, count) {
+  const scene = scenes[playerIdx];
+  resizeCanvas();
+  const layout = layoutTargets(playerIdx, count);
+  scene.savedTargets = layout.targets;
+
+  // Si on a moins de dés que demandé : ajouter
+  // Si on a plus : retirer les derniers
+  const current = scene.dice.length;
+
+  if (count < current) {
+    // Marquer les dés excédentaires pour fade-out
+    for (let i = count; i < current; i++) {
+      if (scene.dice[i]) scene.dice[i].state = 'fadingOut';
+    }
+    // Repositionner les dés restants aux nouvelles cibles avec animation douce
+    for (let i = 0; i < count; i++) {
+      const d = scene.dice[i];
+      if (d && d.state === 'rested') {
+        d.repositionTo(layout.targets[i][0], layout.targets[i][1]);
+      }
+    }
+  } else if (count > current) {
+    // Repositionner les existants
+    for (let i = 0; i < current; i++) {
+      const d = scene.dice[i];
+      if (d && d.state === 'rested') {
+        d.repositionTo(layout.targets[i][0], layout.targets[i][1]);
+      }
+    }
+    // Ajouter les nouveaux dés
+    for (let i = current; i < count; i++) {
+      const v = 1 + Math.floor(Math.random()*6);
+      const d = new Die3D(v, i, count);
+      d.appearAt(layout.targets[i][0], layout.targets[i][1]);
+      scene.dice.push(d);
+    }
+  } else {
+    // Même nombre : ne rien faire
+  }
+}
+
+// ============================================================
+// Main animation loop - rend les 2 canvas à chaque frame
+// ============================================================
+function animate(ts) {
+  const dt = Math.min((ts - lastFrameTime)/16.6667, 2);
+  lastFrameTime = ts;
+
+  for (let i = 0; i < canvases.length; i++) {
+    const scene = scenes[i];
+    const canvas = canvases[i];
+    const ctx = ctxs[i];
+    if (!scene || !canvas || !ctx) continue;
+    const rect = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    let allRolledRested = true;
+    for (const d of scene.dice) {
+      d.update(dt);
+      if (d.state === 'rolling' || d.state === 'settling') allRolledRested = false;
+    }
+
+    scene.dice = scene.dice.filter(d => !d.shouldRemove);
+
+    const sorted = [...scene.dice].sort((a,b)=>a.y - b.y);
+    for (const d of sorted) d.draw(ctx);
+
+    if (scene.rolling && allRolledRested && scene.dice.length > 0) {
+      scene.rolling = false;
+      if (scene.onComplete) {
+        const cb = scene.onComplete;
+        scene.onComplete = null;
+        setTimeout(cb, 300);
+      }
+    }
+  }
+
+  requestAnimationFrame(animate);
+}
+
+// ============================================================
+// UI / Game Logic
+// ============================================================
+const DOM = {
+  // Éléments statiques (présents au chargement, pas régénérés)
+  roundNum: document.getElementById('roundNum'),
+  roundMax: document.getElementById('roundMax'),
+  turnPlayer: document.getElementById('turnPlayer'),
+  card: document.getElementById('card'),
+  cardFront: document.getElementById('cardFront'),
+  cardDesc: document.getElementById('cardDesc'),
+  diceChosen: document.getElementById('diceChosen'),
+  btnMinus: document.getElementById('btnMinus'),
+  btnPlus: document.getElementById('btnPlus'),
+  btnRoll: document.getElementById('btnRoll'),
+  btnValidate: document.getElementById('btnValidate'),
+  chooseSection: document.getElementById('chooseSection'),
+  rollSection: document.getElementById('rollSection'),
+  rollsLeft: document.getElementById('rollsLeft'),
+  btnNext: document.getElementById('btnNext'),
+  overlay: document.getElementById('overlay'),
+  modalTitle: document.getElementById('modalTitle'),
+  modalText: document.getElementById('modalText'),
+  modalWinner: document.getElementById('modalWinner'),
+  btnRestart: document.getElementById('btnRestart'),
+  toasts: document.getElementById('toasts')
+  // Note: éléments par joueur (panelPi, matWrapperPi, matNamePi, matScorePi,
+  // diceCanvasPi, etc.) sont récupérés via document.getElementById quand nécessaire,
+  // car régénérés dynamiquement par buildPlayerUI() selon le nombre de joueurs.
+};
+
+// ---- Card sprite sheet: compute background-position & size ----
+// Cards image is 1764x540 px, layout: 7 columns x 3 rows, each tile 252x180
+const CARD_SHEET = { cols: 7, rows: 3, tileW: 252, tileH: 180, displayW: 400, displayH: 286 };
+
+// Preload sprite sheet
+let cardsImgLoaded = false;
+const cardsImg = new Image();
+cardsImg.onload = () => { cardsImgLoaded = true; console.log('[OK] cards.png loaded:', cardsImg.width+'x'+cardsImg.height); };
+cardsImg.onerror = (e) => { console.error('[ERREUR] cards.png ne peut pas être chargé. Vérifie que le fichier est dans le dossier images/.', e); };
+cardsImg.src = 'images/cards.png';
+
+// Preload boss image (remplace la face 6)
+let bossImgLoaded = false;
+const bossImg = new Image();
+bossImg.onload = () => { bossImgLoaded = true; console.log('[OK] boss.png loaded'); };
+bossImg.onerror = (e) => { console.error('[ERREUR] boss.png ne peut pas être chargé.', e); };
+bossImg.src = 'images/boss.png';
+
+function setCardFace(card) {
+  // Compute scale so one tile fits the card face
+  const scaleX = CARD_SHEET.displayW / CARD_SHEET.tileW;
+  const scaleY = CARD_SHEET.displayH / CARD_SHEET.tileH;
+  // Use background-size = full sheet scaled
+  const bgW = CARD_SHEET.cols * CARD_SHEET.tileW * scaleX;
+  const bgH = CARD_SHEET.rows * CARD_SHEET.tileH * scaleY;
+  DOM.cardFront.style.backgroundSize = `${bgW}px ${bgH}px`;
+  const px = -card.sx * CARD_SHEET.tileW * scaleX;
+  const py = -card.sy * CARD_SHEET.tileH * scaleY;
+  DOM.cardFront.style.backgroundPosition = `${px}px ${py}px`;
+
+  // Textual fallback overlay in case image doesn't load
+  if (!cardsImgLoaded) {
+    DOM.cardFront.innerHTML = `<div style="
+      width:100%;height:100%;
+      display:flex;align-items:center;justify-content:center;
+      background:linear-gradient(135deg,#f5e6d3,#e8d4b8);
+      color:#2a1505;
+      font-family:'Impact',sans-serif;
+      font-size:28px;text-align:center;padding:20px;
+      border:3px solid #8b4513;
+    ">${card.name}</div>`;
+  } else {
+    DOM.cardFront.innerHTML = '';
+  }
+}
+
+function toast(msg, type='info') {
+  showToast(msg, type);
+  // En mode multi côté hôte : relayer aux invités pour qu'ils voient les
+  // mêmes événements (lancer de carte, gagnant, IA décide, etc.)
+  if (multi.enabled && multi.isHost) {
+    broadcastToGuests({ type: 'toast', msg, toastType: type });
+  }
+}
+
+// Affichage local d'un toast (sans broadcast, pour éviter les boucles
+// quand on reçoit un toast distant).
+function showToast(msg, type='info') {
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  DOM.toasts.appendChild(t);
+  setTimeout(()=>t.remove(), 2800);
+}
+
+// Afficher/cacher la croix sur le tapis d'un joueur
+// Afficher la croix d'invalidation plein tapis (lancer invalidé)
+function showInvalidCross(playerIdx) {
+  const el = document.getElementById(`crossP${playerIdx + 1}`);
+  if (el) el.classList.add('visible');
+}
+function hideInvalidCross(playerIdx) {
+  if (playerIdx === undefined) {
+    // Reset toutes les croix
+    const n = getPlayerCount();
+    for (let i = 0; i < n; i++) {
+      const el = document.getElementById(`crossP${i + 1}`);
+      if (el) el.classList.remove('visible');
+    }
+  } else {
+    const el = document.getElementById(`crossP${playerIdx + 1}`);
+    if (el) el.classList.remove('visible');
+  }
+}
+
+// Met à jour le label "Nom : Score" au-dessus de chaque tapis.
+// Affiche toujours un nombre (jamais de tiret ni de X) :
+//  - 0 par défaut / en début de manche / si lancer invalidé
+//  - le score réel si lancer valide
+function updateMatLabel(playerIdx) {
+  const el = document.getElementById(`matNameP${playerIdx + 1}`);
+  if (!el) return;
+  const p = state.players[playerIdx];
+  let scoreNum = 0;
+  if (p.rolled && p.valid && typeof p.score === 'number') {
+    scoreNum = p.score;
+  }
+  el.textContent = `${p.name} : ${scoreNum}`;
+}
+
+// Afficher le score sur le tapis (badge en haut à droite)
+function showMatScore(playerIdx, score, valid) {
+  const el = document.getElementById(`matScoreP${playerIdx + 1}`);
+  if (!el) return;
+  if (valid) {
+    el.textContent = `${score} pts`;
+    el.classList.remove('invalid');
+    el.classList.add('visible');
+  } else {
+    // Lancer invalidé : pas d'affichage (la couleur du label suffit)
+    el.classList.remove('visible', 'invalid');
+    el.textContent = '';
+  }
+  updateMatLabel(playerIdx);
+}
+
+function hideMatScore(playerIdx) {
+  if (playerIdx === undefined) {
+    // Reset tous les tapis
+    const n = getPlayerCount();
+    for (let i = 0; i < n; i++) {
+      const el = document.getElementById(`matScoreP${i + 1}`);
+      if (el) el.classList.remove('visible');
+      updateMatLabel(i);
+    }
+  } else {
+    const el = document.getElementById(`matScoreP${playerIdx + 1}`);
+    if (el) el.classList.remove('visible');
+    updateMatLabel(playerIdx);
+  }
+}
+
+function renderStats() {
+  const n = getPlayerCount();
+  for (let i = 0; i < n; i++) {
+    const p = state.players[i];
+    const idx = i + 1;
+    const isCurrent = state.currentPlayer === i && state.phase !== 'gameEnd';
+    const isEliminated = p.dice === 0 && p.tokens === 0;
+
+    // Mise à jour des éléments pills (peuvent être absents pour IA)
+    const diceEl = document.getElementById(`diceP${idx}`);
+    const tokensEl = document.getElementById(`tokensP${idx}`);
+    const scoreEl = document.getElementById(`scoreP${idx}`);
+    const scoreBoxEl = document.getElementById(`scoreBoxP${idx}`);
+    if (diceEl) diceEl.textContent = p.dice;
+    if (tokensEl) tokensEl.textContent = p.tokens;
+    if (scoreEl) scoreEl.textContent = p.score === null ? '-' : p.score;
+    if (scoreBoxEl) scoreBoxEl.className = 'stat-pill score-pill' + (p.rolled && !p.valid ? ' invalid' : '');
+
+    // Panneau joueur (active / eliminated)
+    const panelEl = document.getElementById(`panelP${idx}`);
+    if (panelEl) {
+      panelEl.classList.toggle('active', isCurrent);
+      panelEl.classList.toggle('eliminated', isEliminated);
+    }
+
+    // Wrapper du tapis (active = surbrillance pendant son tour)
+    const wrapEl = document.getElementById(`matWrapperP${idx}`);
+    if (wrapEl) {
+      wrapEl.classList.toggle('active', state.currentPlayer === i && (state.phase==='choosing' || state.phase==='rolling'));
+    }
+  }
+
+  if (DOM.turnPlayer) DOM.turnPlayer.textContent = state.players[state.currentPlayer].name;
+  if (DOM.roundNum) DOM.roundNum.textContent = state.round;
+  if (DOM.roundMax) DOM.roundMax.textContent = CONFIG.maxRounds;
+  if (DOM.diceChosen) DOM.diceChosen.textContent = state.players[state.currentPlayer].chosen;
+}
+
+function renderHistory() {
+  // History compact retiré du jeu : fonction no-op
+  // (mais addHistory continue de stocker dans state.players[i].history,
+  // utile pour le debug ou un futur écran d'historique).
+}
+
+function addHistory(playerIdx, text, type='info') {
+  state.players[playerIdx].history.push({ text, type });
+  renderHistory();
+}
+
+// Gestion UI des phases de tour
+function setChooseMode(enabled) {
+  // Phase où le joueur choisit combien de dés lancer
+  DOM.chooseSection.style.display = 'flex';
+  DOM.btnMinus.disabled = !enabled;
+  DOM.btnPlus.disabled = !enabled;
+  DOM.btnRoll.disabled = !enabled;
+  DOM.btnRoll.textContent = '🎲 LANCER';
+  DOM.btnRoll.style.display = 'inline-block';
+  DOM.btnValidate.style.display = 'none';
+}
+
+function setRerollMode(enabled, rollsLeft) {
+  // Phase où le joueur peut relancer ou valider
+  DOM.chooseSection.style.display = 'none';
+  DOM.btnRoll.disabled = !enabled || rollsLeft === 0;
+  DOM.btnRoll.style.display = rollsLeft > 0 ? 'inline-block' : 'none';
+  DOM.btnValidate.style.display = 'inline-block';
+  DOM.btnValidate.disabled = !enabled;
+  updateRerollButtonLabel();
+}
+
+function updateRerollButtonLabel() {
+  // Adapter le label du bouton relancer selon le nombre de dés sélectionnés
+  if (state.currentPlayer !== 0) return;
+  const scene = scenes[0];
+  const selectedCount = scene.dice.filter(d => d.selectedForReroll && d.state === 'rested').length;
+  if (selectedCount === 0) {
+    DOM.btnRoll.textContent = '🔄 RELANCER TOUT';
+  } else if (selectedCount === 1) {
+    DOM.btnRoll.textContent = `🔄 RELANCER 1 dé`;
+  } else {
+    DOM.btnRoll.textContent = `🔄 RELANCER ${selectedCount} dés`;
+  }
+}
+
+function setWaitingMode() {
+  // Phase où on attend (animation, IA)
+  DOM.btnMinus.disabled = true;
+  DOM.btnPlus.disabled = true;
+  DOM.btnRoll.disabled = true;
+  DOM.btnValidate.disabled = true;
+}
+
+function updateRollsLeftDisplay(used) {
+  DOM.rollsLeft.textContent = MAX_ROLLS - used;
+}
+
+// ============================================================
+// GAME FLOW
+// ============================================================
+function startNewRound() {
+  state.phase = 'preRound';
+  // Reset per-round
+  state.players.forEach(p=>{
+    p.score = null;
+    p.valid = true;
+    p.rolled = false;
+    p.rollsUsed = 0;
+    p.currentValues = [];
+    p.chosen = Math.min(p.chosen, Math.max(1, p.dice));
+    if (p.dice>0 && p.chosen<1) p.chosen=1;
+  });
+  state.diceInPot = 0;
+  clearDice();
+  hideInvalidCross();
+  hideMatScore();
+  // Reset selection au début de chaque manche (sécurité) - tous les tapis
+  for (const scene of scenes) {
+    for (const d of scene.dice) d.selectedForReroll = false;
+  }
+
+  // Pick a card : seul l'hôte (ou le solo) tire une carte. L'invité attend le message.
+  let card;
+  if (multi.enabled && !multi.isHost) {
+    card = state.currentCard; // utiliser la dernière carte connue (sera mise à jour par le message)
+  } else {
+    card = pickNextCard();
+    state.currentCard = card;
+    // En multi : broadcaster la carte aux invités
+    if (multi.enabled && multi.isHost) {
+      broadcastToGuests({ type: 'card', cardId: card.id });
+    }
+  }
+  if (!card) {
+    // Sécurité : pas de carte connue, on attend
+    return;
+  }
+
+  // Animation de la carte : slide pour les manches > 1, affichage direct pour la manche 1
+  const isFirstRound = state.round === 1;
+
+  if (isFirstRound) {
+    // Affichage direct sans animation
+    setCardFace(card);
+    DOM.cardDesc.textContent = card.desc;
+    toast(`Carte: ${card.name}`, 'info');
+  } else {
+    // Animation slide : sort à gauche, entre à droite
+    DOM.cardDesc.textContent = "";
+    DOM.card.classList.remove('sliding-in', 'sliding-out');
+    void DOM.card.offsetWidth; // reflow
+    DOM.card.classList.add('sliding-out');
+
+    setTimeout(()=>{
+      // À la moitié de l'anim : changer de carte
+      setCardFace(card);
+      DOM.card.classList.remove('sliding-out');
+      void DOM.card.offsetWidth;
+      DOM.card.classList.add('sliding-in');
+    }, 350);
+
+    setTimeout(()=>{
+      DOM.cardDesc.textContent = card.desc;
+      toast(`Carte: ${card.name}`, 'info');
+      DOM.card.classList.remove('sliding-in');
+    }, 800);
+  }
+
+  // Détermination du premier joueur : celui avec le moins de dés (parmi vivants)
+  // En cas d'égalité, aléatoire.
+  const n = getPlayerCount();
+  let minDice = Infinity;
+  const candidates = [];
+  for (let i = 0; i < n; i++) {
+    const p = state.players[i];
+    if (p.dice === 0 && p.tokens === 0) continue; // éliminé
+    if (p.dice < minDice) {
+      minDice = p.dice;
+      candidates.length = 0;
+      candidates.push(i);
+    } else if (p.dice === minDice) {
+      candidates.push(i);
+    }
+  }
+  state.currentPlayer = candidates.length > 0
+    ? candidates[Math.floor(Math.random() * candidates.length)]
+    : 0;
+
+  state.turnsThisRound = 0;
+
+  // Skip si le joueur actuel n'a plus de dés (utilise son jeton sinon, géré ailleurs)
+  if (state.players[state.currentPlayer].dice === 0) {
+    for (let step = 1; step <= n; step++) {
+      const cand = (state.currentPlayer + step) % n;
+      if (state.players[cand].dice > 0) { state.currentPlayer = cand; break; }
+    }
+  }
+
+  const startDelay = isFirstRound ? 600 : 900;
+  setTimeout(()=> {
+    state.phase = 'choosing';
+    DOM.btnNext.style.display = 'none';
+    DOM.chooseSection.style.display = 'flex';
+    DOM.rollSection.style.display = 'flex';
+    renderStats();
+    beginPlayerTurn();
+  }, startDelay);
+}
+
+function beginPlayerTurn() {
+  const p = state.players[state.currentPlayer];
+  if (p.dice === 0) {
+    // Skip player without dice
+    finishPlayerTurn();
+    return;
+  }
+  p.chosen = Math.min(Math.max(1, p.chosen), p.dice, CONFIG.maxDicePerRoll);
+  p.rollsUsed = 0;
+  p.currentValues = [];
+  state.phase = 'choosing';
+
+  // Détermine si c'est le tour du joueur LOCAL (humain de cette fenêtre)
+  const isLocalTurn = multi.enabled
+    ? (state.currentPlayer === multi.myPlayerIdx)
+    : state.players[state.currentPlayer].isHuman;
+
+  if (!state.players[state.currentPlayer].isHuman) {
+    // IA : décide le nombre de dés (uniquement en solo, pas en multi)
+    setWaitingMode();
+    renderStats();
+    setTimeout(()=> aiTurn(), 700);
+  } else if (isLocalTurn) {
+    // C'est mon tour de jouer (humain local)
+    setChooseMode(true);
+    updateRollsLeftDisplay(0);
+    previewDice(state.currentPlayer, p.chosen);
+  } else {
+    // Multi : c'est le tour d'un autre joueur, j'attends
+    setWaitingMode();
+    previewDice(state.currentPlayer, p.chosen);
+  }
+  renderStats();
+
+  // En multi côté hôte : sync l'état (phase, currentPlayer) aux invités
+  if (multi.enabled && multi.isHost) broadcastSync();
+}
+
+// ---------- IA ----------
+// L'IA fait son choix initial, lance, puis décide s'il faut relancer
+
+// Retourne le meilleur score à battre parmi les adversaires qui ont déjà joué
+// (joueurs ayant rolled et valid). Renvoie 0 si personne n'a encore joué.
+function getBestRivalScore(aiIdx) {
+  let best = 0;
+  state.players.forEach((p, i) => {
+    if (i === aiIdx) return;
+    if (p.rolled && p.valid && typeof p.score === 'number' && p.score > best) {
+      best = p.score;
+    }
+  });
+  return best;
+}
+
+// L'IA fait son choix initial, lance, puis décide s'il faut relancer
+function aiTurn() {
+  const aiIdx = state.currentPlayer;
+  const ai = state.players[aiIdx];
+  const card = state.currentCard;
+  const rivalScore = getBestRivalScore(aiIdx);
+
+  // 1) Choix du nombre de dés via Monte-Carlo
+  let bestChoice = 1, bestScore = -Infinity;
+  const maxDice = Math.min(ai.dice, CONFIG.maxDicePerRoll);
+  const trials = 800;
+  const simulateMaxOfThree = !card.explosive;
+
+  for (let n=1; n<=maxDice; n++) {
+    let totalExpected = 0;
+    let successCount = 0;
+
+    for (let t=0; t<trials; t++) {
+      let bestOfRolls = 0;
+      let anySuccess = false;
+      const tries = simulateMaxOfThree ? 3 : 1;
+
+      for (let k=0; k<tries; k++) {
+        const rolls = Array.from({length:n}, ()=>1+Math.floor(Math.random()*6));
+        const ok = evalCardRule(card, rolls);
+        if (ok) {
+          anySuccess = true;
+          const s = diceSum(rolls);
+          if (s > bestOfRolls) bestOfRolls = s;
+        }
+      }
+
+      if (anySuccess) {
+        totalExpected += bestOfRolls;
+        successCount++;
+      } else {
+        totalExpected -= card.explosive ? 12 : 3;
+      }
+    }
+
+    const avg = totalExpected / trials;
+    const successRate = successCount / trials;
+
+    let sc = avg;
+
+    // Bonus/malus selon situation : meilleur score adverse
+    if (rivalScore > 0) {
+      if (avg < rivalScore) sc -= (rivalScore - avg) * 0.3;
+      else sc += 0.5;
+    }
+
+    if (card.explosive && successRate < 0.5) {
+      sc -= (0.5 - successRate) * 15;
+    }
+
+    sc -= n * 0.15;
+
+    if (sc > bestScore) { bestScore = sc; bestChoice = n; }
+  }
+
+  ai.chosen = bestChoice;
+  renderStats();
+  toast(`${ai.name} choisit ${bestChoice} dé${bestChoice>1?'s':''}`, 'info');
+  previewDice(aiIdx, bestChoice);
+  setTimeout(()=> doFirstRoll(), 1100);
+}
+
+// Décide si l'IA relance ou valide
+function aiDecideReroll() {
+  const aiIdx = state.currentPlayer;
+  const ai = state.players[aiIdx];
+  const card = state.currentCard;
+  const rivalScore = getBestRivalScore(aiIdx);
+
+  const rollsLeft = MAX_ROLLS - ai.rollsUsed;
+  if (rollsLeft <= 0) { aiValidate(); return; }
+
+  const currentValid = evalCardRule(card, ai.currentValues);
+  const currentSum = currentValid ? diceSum(ai.currentValues) : 0;
+
+  // Simuler un relancement
+  const n = ai.chosen;
+  let expectedAfter = 0;
+  const trials = 300;
+  for (let t=0;t<trials;t++) {
+    const rolls = Array.from({length:n}, ()=>1+Math.floor(Math.random()*6));
+    const ok = evalCardRule(card, rolls);
+    expectedAfter += ok ? diceSum(rolls) : 0;
+  }
+  expectedAfter /= trials;
+
+  const target = rivalScore;
+
+  let shouldReroll = false;
+  if (!currentValid) {
+    shouldReroll = true;
+  } else if (currentSum < target) {
+    if (expectedAfter + 1.5 >= currentSum) shouldReroll = true;
+  } else if (currentSum <= expectedAfter - 2 && rollsLeft >= 2) {
+    shouldReroll = true;
+  }
+
+  if (shouldReroll) {
+    toast(`${ai.name} relance !`, 'info');
+    setTimeout(()=> doReroll(), 900);
+  } else {
+    toast(`${ai.name} valide son lancer`, 'info');
+    setTimeout(()=> aiValidate(), 600);
+  }
+}
+
+function aiValidate() {
+  validateRoll();
+}
+
+// ---------- Lancers ----------
+function doFirstRoll() {
+  // En mode multi côté invité, on ne fait rien : l'hôte va générer et broadcaster
+  if (multi.enabled && !multi.isHost) return;
+
+  const player = state.players[state.currentPlayer];
+  const playerIdx = state.currentPlayer;
+  if (player.chosen > player.dice) player.chosen = player.dice;
+  if (player.chosen < 1) player.chosen = 1;
+
+  state.phase = 'rolling';
+  setWaitingMode();
+
+  // Son pour l'IA (l'humain l'a déjà joué sur le click du bouton)
+  if (!state.players[playerIdx].isHuman) playSound();
+
+  // Génération des valeurs (l'hôte est l'autorité)
+  const values = Array.from({length: player.chosen}, ()=> 1 + Math.floor(Math.random()*6));
+  player.currentValues = values;
+  player.rollsUsed = 1;
+
+  // En multi : broadcaster aux invités
+  if (multi.enabled && multi.isHost) {
+    broadcastToGuests({
+      type: 'roll',
+      playerIdx,
+      values,
+      isReroll: false
+    });
+    broadcastSync();
+  }
+
+  startRoll(playerIdx, values, ()=> afterRoll(playerIdx));
+}
+
+function doReroll() {
+  // En mode multi côté invité, on ne fait rien : l'hôte va générer et broadcaster
+  if (multi.enabled && !multi.isHost) return;
+
+  const player = state.players[state.currentPlayer];
+  const playerIdx = state.currentPlayer;
+  state.phase = 'rolling';
+  setWaitingMode();
+
+  if (!state.players[playerIdx].isHuman) playSound();
+
+  hideInvalidCross(playerIdx);
+  hideMatScore(playerIdx);
+
+  const scene = scenes[playerIdx];
+
+  // Déterminer quels dés relancer
+  // - Humain (P0 ou autre) : si au moins 1 dé sélectionné → ne relancer que ceux-là
+  // - Sinon (humain sans sélection, ou IA) → relancer tous
+  const selectedIndices = [];
+  if (state.players[playerIdx].isHuman && scene) {
+    scene.dice.forEach((d, i) => {
+      if (d.selectedForReroll) selectedIndices.push(i);
+    });
+  }
+
+  const rerollAll = selectedIndices.length === 0;
+
+  if (rerollAll) {
+    clearDice(playerIdx);
+    const values = Array.from({length: player.chosen}, ()=> 1 + Math.floor(Math.random()*6));
+    player.currentValues = values;
+    player.rollsUsed += 1;
+
+    if (multi.enabled && multi.isHost) {
+      broadcastToGuests({
+        type: 'roll',
+        playerIdx,
+        values,
+        isReroll: false
+      });
+      broadcastSync();
+    }
+
+    startRoll(playerIdx, values, ()=> afterRoll(playerIdx));
+  } else {
+    // Relance partielle
+    const newValues = [...player.currentValues];
+    const newGenerated = [];
+    for (const idx of selectedIndices) {
+      const v = 1 + Math.floor(Math.random()*6);
+      newValues[idx] = v;
+      newGenerated.push(v);
+    }
+    player.currentValues = newValues;
+    player.rollsUsed += 1;
+
+    if (multi.enabled && multi.isHost) {
+      broadcastToGuests({
+        type: 'roll',
+        playerIdx,
+        values: newGenerated,
+        isReroll: true,
+        rerollIndices: selectedIndices
+      });
+      broadcastSync();
+    }
+
+    const rect = canvases[playerIdx].getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2 + 10;
+
+    for (const idx of selectedIndices) {
+      const oldDie = scene.dice[idx];
+      const tx = oldDie.targetX;
+      const ty = oldDie.targetY;
+      const newDie = new Die3D(newValues[idx], idx, player.chosen);
+      newDie.start(cx, cy, tx, ty);
+      scene.dice[idx] = newDie;
+    }
+
+    for (const d of scene.dice) d.selectedForReroll = false;
+
+    scene.rolling = true;
+    scene.onComplete = ()=> afterRoll(playerIdx);
+  }
+}
+
+function afterRoll(playerIdx) {
+  const player = state.players[playerIdx];
+  const card = state.currentCard;
+  const values = player.currentValues;
+  const valid = evalCardRule(card, values);
+  const sum = valid ? diceSum(values) : 0;
+
+  // Affichage intermédiaire sur le tapis :
+  // - La croix ne s'affiche QUE si :
+  //   a) carte explosive + invalide (c'est définitif)
+  //   b) plus aucun lancer possible (validateRoll va être appelé juste après)
+  // Pour une carte bombe + invalide mais avec relances restantes : on n'affiche pas la croix
+  // car le joueur peut encore rectifier la situation
+  showMatScore(playerIdx, sum, valid);
+  const isFinalInvalid = !valid && (card.explosive || player.rollsUsed >= MAX_ROLLS);
+  if (isFinalInvalid) {
+    showInvalidCross(playerIdx);
+  } else {
+    // S'assurer que la croix reste cachée (cas des relances bombe)
+    hideInvalidCross(playerIdx);
+  }
+
+  const bossCount = values.filter(v => v === 6).length;
+  const bossStr = bossCount > 0 ? ` (${bossCount} boss)` : '';
+  const rollLabel = `Lancer ${player.rollsUsed}/${MAX_ROLLS}`;
+
+  if (valid) {
+    toast(`${player.name} ${rollLabel}: ${sum} pts${bossStr}`, 'success');
+  } else {
+    if (card.explosive) {
+      toast(`💥 ${player.name} — CARTE EXPLOSIVE déclenchée !`, 'error');
+    } else {
+      // Carte bombe : message doux qui informe qu'il peut relancer
+      const rollsLeft = MAX_ROLLS - player.rollsUsed;
+      if (rollsLeft > 0) {
+        toast(`${player.name}: ${rollLabel} — ${rollsLeft} relance${rollsLeft>1?'s':''} possible${rollsLeft>1?'s':''}`, 'info');
+      } else {
+        toast(`${player.name}: lancer final invalidé`, 'error');
+      }
+    }
+  }
+
+  // ⚡ CARTE EXPLOSIVE + lancer invalide → fin de tour immédiate, pas de relance
+  if (!valid && card.explosive) {
+    state.phase = 'rerolling';
+    setWaitingMode();
+    setTimeout(()=> validateRoll(), 1400);
+    return;
+  }
+
+  // Sinon : passage au choix relancer/valider (carte bombe OU lancer valide)
+  state.phase = 'rerolling';
+  const rollsLeft = MAX_ROLLS - player.rollsUsed;
+
+  // Détermine si c'est le tour du joueur LOCAL (humain de cette fenêtre)
+  const isLocalTurn = multi.enabled
+    ? (playerIdx === multi.myPlayerIdx)
+    : state.players[playerIdx].isHuman;
+
+  setTimeout(()=>{
+    if (!state.players[playerIdx].isHuman) {
+      // IA (solo uniquement) décide
+      setWaitingMode();
+      aiDecideReroll();
+    } else if (isLocalTurn) {
+      // Humain LOCAL : afficher boutons
+      if (rollsLeft > 0) {
+        setRerollMode(true, rollsLeft);
+      } else {
+        // Plus de lancers : auto-validation après 1s
+        setRerollMode(false, 0);
+        toast('Plus de lancers disponibles', 'info');
+        // En multi : seul l'hôte déclenche validateRoll automatiquement
+        if (!multi.enabled || multi.isHost) {
+          setTimeout(()=> validateRoll(), 1200);
+        }
+      }
+      updateRollsLeftDisplay(player.rollsUsed);
+    } else {
+      // Pas mon tour local. Côté hôte en multi : si l'invité n'a plus de
+      // lancers, l'hôte auto-valide à sa place (l'hôte est l'autorité).
+      setWaitingMode();
+      if (multi.enabled && multi.isHost && rollsLeft <= 0) {
+        toast(`${player.name} : plus de lancers disponibles`, 'info');
+        setTimeout(()=> validateRoll(), 1400);
+      }
+    }
+  }, 1000);
+
+  // En multi côté hôte : sync l'état (phase passée à rerolling)
+  if (multi.enabled && multi.isHost) {
+    setTimeout(()=> broadcastSync(), 1050);
+  }
+}
+
+function validateRoll() {
+  // Côté invité : on n'exécute rien, l'hôte fera le calcul et nous resync
+  if (multi.enabled && !multi.isHost) return;
+
+  const playerIdx = state.currentPlayer;
+  const player = state.players[playerIdx];
+  const card = state.currentCard;
+  const values = player.currentValues;
+
+  const valid = evalCardRule(card, values);
+  const sum = valid ? diceSum(values) : 0;
+
+  player.rolled = true;
+  player.valid = valid;
+  player.score = sum;
+  player.lastValues = values;
+
+  // Déselectionner tous les dés (cleanup à la fin du tour)
+  scenes[playerIdx].dice.forEach(d => d.selectedForReroll = false);
+
+  // Affichage final sur le tapis
+  showMatScore(playerIdx, sum, valid);
+  if (!valid) showInvalidCross(playerIdx);
+
+  // En multi côté hôte : broadcaster ces affichages aux invités
+  if (multi.enabled && multi.isHost) {
+    broadcastToGuests({ type: 'matScore', playerIdx, score: sum, valid });
+    if (!valid) {
+      broadcastToGuests({ type: 'invalidCross', playerIdx });
+    }
+  }
+
+  if (valid) {
+    const bossCount = values.filter(v => v === 6).length;
+    const bossStr = bossCount > 0 ? ` (${bossCount} boss ignoré${bossCount>1?'s':''})` : '';
+    addHistory(playerIdx, `M.${state.round}: ${values.join('+')} = ${sum}${bossStr} ✓`, 'valid');
+  } else {
+    addHistory(playerIdx, `M.${state.round}: ${values.join(',')} ✗ Invalidé`, 'invalid');
+  }
+  renderStats();
+  setWaitingMode();
+
+  // Sync l'état après validation (côté hôte uniquement)
+  if (multi.enabled && multi.isHost) broadcastSync();
+
+  setTimeout(()=> finishPlayerTurn(), 900);
+}
+
+function finishPlayerTurn() {
+  state.turnsThisRound++;
+  const n = getPlayerCount();
+  // Tous les joueurs actifs (avec dés > 0) ont-ils joué ?
+  const allPlayed = state.players.every(p => p.rolled || p.dice === 0);
+
+  if (!allPlayed) {
+    // Trouver le prochain joueur qui n'a pas encore joué (et qui a des dés)
+    let nextIdx = state.currentPlayer;
+    for (let step = 1; step <= n; step++) {
+      const candidate = (state.currentPlayer + step) % n;
+      const cand = state.players[candidate];
+      if (!cand.rolled && cand.dice > 0) {
+        nextIdx = candidate;
+        break;
+      }
+    }
+    state.currentPlayer = nextIdx;
+    beginPlayerTurn();
+  } else {
+    endRound();
+  }
+}
+
+function endRound() {
+  state.phase = 'roundEnd';
+  // On garde les dés et la croix affichés pendant le résumé
+  // (ils seront nettoyés au prochain startNewRound)
+
+  const players = state.players;
+  const n = players.length;
+
+  // Pot = total des dés joués par tous les joueurs
+  let pot = 0;
+  for (const p of players) {
+    if (p.rolled) pot += p.chosen;
+  }
+
+  // Détermination du gagnant parmi N joueurs
+  // - Joueurs valides ayant joué : on prend celui avec le score max
+  // - En cas d'égalité de score : winner = -1 (égalité, dés rendus)
+  // - Si personne n'est valide : winner = -1
+  let winner = -1;
+  let bestScore = -1;
+  let topPlayers = [];
+  for (let i = 0; i < n; i++) {
+    const p = players[i];
+    if (p.rolled && p.valid && typeof p.score === 'number') {
+      if (p.score > bestScore) {
+        bestScore = p.score;
+        topPlayers = [i];
+      } else if (p.score === bestScore) {
+        topPlayers.push(i);
+      }
+    }
+  }
+  if (topPlayers.length === 1) {
+    winner = topPlayers[0];
+  } else if (topPlayers.length > 1) {
+    // Tie-break : selon les règles, le joueur ayant joué le PLUS DE DÉS gagne
+    let maxDice = -1;
+    let tieWinner = -1;
+    let multipleMax = false;
+    for (const idx of topPlayers) {
+      const c = players[idx].chosen;
+      if (c > maxDice) { maxDice = c; tieWinner = idx; multipleMax = false; }
+      else if (c === maxDice) { multipleMax = true; }
+    }
+    winner = multipleMax ? -1 : tieWinner;
+  }
+
+  // Affichage des croix sur les tapis invalidés
+  for (let i = 0; i < n; i++) {
+    if (!players[i].valid && players[i].rolled) {
+      showInvalidCross(i);
+      if (multi.enabled && multi.isHost) {
+        broadcastToGuests({ type: 'invalidCross', playerIdx: i });
+      }
+    }
+  }
+
+  if (winner >= 0) {
+    toast(`${players[winner].name} remporte ${pot} dés !`, 'success');
+    setTimeout(()=> {
+      flyDiceToWinner(winner, ()=> {
+        finalizeRoundEnd(winner, pot);
+      });
+      requestAnimationFrame(animateFlyScene);
+    }, 900);
+  } else {
+    toast('Égalité — les dés reviennent à leurs propriétaires', 'info');
+    setTimeout(()=> finalizeRoundEnd(-1, pot), 1400);
+  }
+}
+
+function finalizeRoundEnd(winner, pot) {
+  const players = state.players;
+  const n = players.length;
+
+  // Retirer les dés joués par chaque joueur
+  for (let i = 0; i < n; i++) {
+    if (players[i].rolled) players[i].dice -= players[i].chosen;
+  }
+
+  if (winner >= 0) {
+    players[winner].dice += pot;
+    addHistory(winner, `Gagne ${pot} dés !`, 'win');
+  } else {
+    // Égalité : tous les dés reviennent à leurs propriétaires
+    for (let i = 0; i < n; i++) {
+      if (players[i].rolled) players[i].dice += players[i].chosen;
+    }
+  }
+
+  // Check elimination + utilisation de jetons
+  for (let i = 0; i < n; i++) {
+    const p = players[i];
+    if (p.dice === 0 && p.tokens > 0) {
+      p.tokens--;
+      p.dice = 2;
+      addHistory(i, `Utilise un jeton → +2 dés`, 'info');
+      toast(`${p.name} utilise un jeton (+2 dés)`, 'info');
+    }
+  }
+
+  renderStats();
+  renderHistory();
+
+  DOM.chooseSection.style.display = 'none';
+  DOM.rollSection.style.display = 'none';
+  DOM.btnNext.style.display = 'inline-block';
+  DOM.btnNext.disabled = false;
+
+  // Check game end : tous les joueurs sauf un sont éliminés ?
+  const aliveCount = players.filter(p => p.dice > 0 || p.tokens > 0).length;
+  if (state.round >= CONFIG.maxRounds || aliveCount <= 1) {
+    setTimeout(()=> endGame(), 1200);
+    return;
+  }
+
+  // Auto-passage à la manche suivante après 3s avec compte à rebours
+  let countdown = 3;
+  DOM.btnNext.textContent = `Suivant ▶ (${countdown}s)`;
+  if (state.autoNextInterval) clearInterval(state.autoNextInterval);
+  state.autoNextInterval = setInterval(()=>{
+    countdown--;
+    if (countdown > 0) {
+      DOM.btnNext.textContent = `Suivant ▶ (${countdown}s)`;
+    } else {
+      clearInterval(state.autoNextInterval);
+      state.autoNextInterval = null;
+      if (state.phase === 'roundEnd') {
+        DOM.btnNext.disabled = true;
+        if (state.round >= CONFIG.maxRounds) endGame();
+        else goToNextRound();
+      }
+    }
+  }, 1000);
+}
+
+function goToNextRound() {
+  state.round++;
+  // En multi côté hôte : notifier les invités de la nouvelle manche
+  // pour qu'ils nettoient leurs tapis avant que la nouvelle carte arrive
+  if (multi.enabled && multi.isHost) {
+    broadcastToGuests({ type: 'roundReset', round: state.round });
+  }
+  startNewRound();
+}
+
+function endGame() {
+  state.phase = 'gameEnd';
+  const players = state.players;
+  // Calcul du score final : 1 jeton = 3 dés (selon les règles officielles)
+  const scored = players.map((p, i) => ({
+    name: p.name,
+    dice: p.dice,
+    tokens: p.tokens,
+    total: p.dice + p.tokens * 3,
+    idx: i
+  }));
+  // Tri descendant par total
+  scored.sort((a, b) => b.total - a.total);
+
+  // Détermine le(s) gagnant(s)
+  const top = scored[0].total;
+  const winners = scored.filter(s => s.total === top);
+
+  let winnerText;
+  if (winners.length > 1) {
+    winnerText = `🤝 ÉGALITÉ : ${winners.map(w => w.name).join(' & ')}`;
+  } else {
+    winnerText = `🏆 ${winners[0].name} GAGNE !`;
+  }
+
+  // Construire la liste des résultats
+  const list = scored.map((s, rank) => {
+    const medal = rank === 0 ? '🥇' : (rank === 1 ? '🥈' : (rank === 2 ? '🥉' : '🎲'));
+    return `${medal} <strong>${s.name}</strong> — ${s.dice} dés + ${s.tokens} jetons = <strong>${s.total} pts</strong>`;
+  }).join('<br>');
+
+  DOM.modalTitle.textContent = 'FIN DE PARTIE';
+  DOM.modalWinner.textContent = winnerText;
+  DOM.modalText.innerHTML = list;
+  DOM.overlay.classList.add('visible');
+}
+
+// ============================================================
+// Controls
+// ============================================================
+// En mode multi, vérifie si c'est notre tour et qu'on peut agir
+function isMyTurn() {
+  if (!multi.enabled) return state.players[state.currentPlayer].isHuman;
+  return state.currentPlayer === multi.myPlayerIdx;
+}
+
+DOM.btnMinus.addEventListener('click', ()=> {
+  if (state.phase !== 'choosing') return;
+  if (!isMyTurn()) return;
+  if (multi.enabled && !multi.isHost) {
+    // Invité : envoyer à l'hôte
+    sendActionToHost('minus', {});
+    playSound();
+    return;
+  }
+  // Hôte ou solo : exécuter localement
+  const p = state.players[state.currentPlayer];
+  if (p.chosen > 1) {
+    p.chosen--;
+    playSound();
+  }
+  renderStats();
+  previewDice(state.currentPlayer, p.chosen);
+  if (multi.enabled && multi.isHost) broadcastSync();
+});
+
+DOM.btnPlus.addEventListener('click', ()=> {
+  if (state.phase !== 'choosing') return;
+  if (!isMyTurn()) return;
+  if (multi.enabled && !multi.isHost) {
+    sendActionToHost('plus', {});
+    playSound();
+    return;
+  }
+  const p = state.players[state.currentPlayer];
+  if (p.chosen < Math.min(p.dice, CONFIG.maxDicePerRoll)) {
+    p.chosen++;
+    playSound();
+  }
+  renderStats();
+  previewDice(state.currentPlayer, p.chosen);
+  if (multi.enabled && multi.isHost) broadcastSync();
+});
+
+DOM.btnRoll.addEventListener('click', ()=> {
+  if (!isMyTurn()) return;
+  if (state.phase === 'choosing') {
+    if (multi.enabled && !multi.isHost) {
+      sendActionToHost('roll', {});
+      playSound();
+      return;
+    }
+    playSound();
+    doFirstRoll();
+  } else if (state.phase === 'rerolling') {
+    const p = state.players[state.currentPlayer];
+    if (p.rollsUsed < MAX_ROLLS) {
+      if (multi.enabled && !multi.isHost) {
+        // Récupérer les indices des dés sélectionnés pour la relance
+        const indices = [];
+        const scene = scenes[multi.myPlayerIdx];
+        if (scene) {
+          scene.dice.forEach((d, i) => {
+            if (d.selectedForReroll) indices.push(i);
+          });
+        }
+        sendActionToHost('reroll', { indices });
+        playSound();
+        return;
+      }
+      playSound();
+      doReroll();
+    }
+  }
+});
+
+DOM.btnValidate.addEventListener('click', ()=> {
+  if (state.phase !== 'rerolling') return;
+  if (!isMyTurn()) return;
+  if (multi.enabled && !multi.isHost) {
+    sendActionToHost('validate', {});
+    playSound();
+    return;
+  }
+  playSound();
+  validateRoll();
+});
+
+DOM.btnNext.addEventListener('click', ()=> {
+  DOM.btnNext.disabled = true;
+  playSound();
+  if (state.autoNextInterval) {
+    clearInterval(state.autoNextInterval);
+    state.autoNextInterval = null;
+  }
+  if (multi.enabled && !multi.isHost) {
+    sendActionToHost('next', {});
+    return;
+  }
+  if (state.round >= CONFIG.maxRounds) {
+    endGame();
+  } else {
+    goToNextRound();
+  }
+});
+DOM.btnRestart.addEventListener('click', ()=> {
+  playSound();
+  DOM.overlay.classList.remove('visible');
+  resetGame();
+});
+
+function resetGame() {
+  state.round = 1;
+  state.currentPlayer = 0;
+  // Reset stats des joueurs existants (le nombre/type ne change pas)
+  state.players.forEach(p=>{
+    p.dice = CONFIG.startDice;
+    p.tokens = CONFIG.startTokens;
+    p.chosen = 1;
+    p.score = null;
+    p.valid = true;
+    p.rolled = false;
+    p.rollsUsed = 0;
+    p.currentValues = [];
+    p.history = [];
+  });
+  state.diceInPot = 0;
+  state.recentCardIds = [];
+  state.recentCategories = [];
+  // Reconstruire l'UI au cas où (sécurité, identique au startGameWithConfig)
+  buildPlayerUI();
+  rebuildCanvases();
+  rebuildScenes();
+  attachHumanCanvasHandlers();
+  resizeCanvas();
+
+  clearDice();
+  hideInvalidCross();
+  hideMatScore();
+  renderStats();
+  renderHistory();
+  for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+  startNewRound();
+}
+
+// ============================================================
+// Init et menu d'accueil
+// ============================================================
+
+// Pool de noms aléatoires pour les IA
+const AI_NAME_POOL = [
+  'Boss', 'Lieutenant', 'Bras Droit', 'Soldat', 'Capo',
+  'Le Borgne', 'Tony', 'Vito', 'Sal', 'Frankie',
+  'Le Russe', 'Le Greco', 'Joe', 'Ace', 'Dutch',
+  'Lucky', 'Diamond', 'Big Mike', 'Carmine', 'Rocco'
+];
+
+function pickRandomAINames(count) {
+  const shuffled = [...AI_NAME_POOL].sort(()=> Math.random()-0.5);
+  return shuffled.slice(0, count);
+}
+
+// Configuration choisie par le menu (sera utilisée par le futur multi/solo flexible)
+let gameConfig = {
+  mode: null,            // 'solo' ou 'multi'
+  humanName: 'Joueur',
+  aiCount: 1,            // pour le mode solo : 1, 2 ou 3
+  aiNames: []
+};
+
+// ----- Logique du menu d'accueil -----
+const welcomeMenu = document.getElementById('welcomeMenu');
+const welcomeViewMain = document.getElementById('welcomeViewMain');
+const welcomeViewSolo = document.getElementById('welcomeViewSolo');
+const welcomePseudo = document.getElementById('welcomePseudo');
+const welcomeBtnSolo = document.getElementById('welcomeBtnSolo');
+const welcomeBtnMulti = document.getElementById('welcomeBtnMulti');
+const welcomeBackFromSolo = document.getElementById('welcomeBackFromSolo');
+const welcomeLaunchSolo = document.getElementById('welcomeLaunchSolo');
+const welcomeAIButtons = document.querySelectorAll('.welcome-ai-btn');
+
+// État local du menu
+let menuSelectedAI = 1;
+
+function getCleanPseudo() {
+  return (welcomePseudo.value || '').trim().substring(0, 14) || 'Joueur';
+}
+
+// Sélection d'un nombre d'IA (vue solo)
+welcomeAIButtons.forEach(btn => {
+  btn.addEventListener('click', ()=> {
+    welcomeAIButtons.forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    menuSelectedAI = parseInt(btn.dataset.ai, 10);
+  });
+});
+// Présélectionner 1 IA par défaut
+welcomeAIButtons[0].classList.add('selected');
+
+// Mode Solo → vue choix IA
+welcomeBtnSolo.addEventListener('click', ()=> {
+  welcomeViewMain.style.display = 'none';
+  welcomeViewSolo.style.display = 'block';
+});
+
+// Multijoueur (pas encore implémenté → toast)
+welcomeBtnMulti.addEventListener('click', ()=> {
+  welcomeBtnMulti.classList.add('disabled');
+  // Petit feedback visuel : secouer le bouton
+  welcomeBtnMulti.animate([
+    { transform: 'translateX(0)' },
+    { transform: 'translateX(-6px)' },
+    { transform: 'translateX(6px)' },
+    { transform: 'translateX(-4px)' },
+    { transform: 'translateX(0)' }
+  ], { duration: 320, easing: 'ease-out' });
+  // Le mode multijoueur sera ajouté dans une prochaine étape
+});
+
+// Retour à la vue principale
+welcomeBackFromSolo.addEventListener('click', ()=> {
+  welcomeViewSolo.style.display = 'none';
+  welcomeViewMain.style.display = 'block';
+});
+
+// Lancer la partie en mode solo
+welcomeLaunchSolo.addEventListener('click', ()=> {
+  const pseudo = getCleanPseudo();
+  gameConfig.mode = 'solo';
+  gameConfig.humanName = pseudo;
+  gameConfig.aiCount = menuSelectedAI;
+  gameConfig.aiNames = pickRandomAINames(menuSelectedAI);
+
+  // Fermer le menu
+  welcomeMenu.classList.add('hidden');
+  setTimeout(()=> { welcomeMenu.style.display = 'none'; }, 600);
+
+  // Démarrer la partie
+  startGameWithConfig();
+});
+
+// Restaurer pseudo précédent depuis localStorage si dispo
+try {
+  const saved = localStorage.getItem('godPseudo');
+  if (saved) welcomePseudo.value = saved;
+} catch(e) {}
+welcomePseudo.addEventListener('change', ()=> {
+  try { localStorage.setItem('godPseudo', getCleanPseudo()); } catch(e) {}
+});
+
+// ----- Démarrage du jeu après config -----
+// IMPORTANT : Pour cette étape, on n'a pas encore refait l'architecture pour
+// supporter > 2 joueurs. Le moteur actuel est en dur 1 humain vs 1 IA.
+// On applique donc le pseudo et le nom de l'IA, mais on reste à 2 joueurs.
+// La refonte multi-joueurs viendra dans la prochaine étape.
+/**
+ * Démarre une nouvelle partie en mode solo avec la config choisie au menu.
+ * Reconstruit complètement state.players, le DOM et les canvases pour
+ * supporter le bon nombre de joueurs (humain + 1/2/3 IA).
+ */
+function startGameWithConfig() {
+  // 1) Reconstruire state.players avec le bon nombre
+  const players = [];
+  // Joueur humain en premier
+  players.push(makePlayer(gameConfig.humanName || 'Joueur', true));
+  // Puis les IA, avec leurs noms aléatoires
+  for (let i = 0; i < gameConfig.aiCount; i++) {
+    const name = (gameConfig.aiNames[i] || `IA ${i+1}`) + ' (IA)';
+    players.push(makePlayer(name, false));
+  }
+  state.players = players;
+
+  // 2) Reset état global de partie
+  state.round = 1;
+  state.currentPlayer = 0;
+  state.turnsThisRound = 0;
+  state.diceInPot = 0;
+  state.recentCardIds = [];
+  state.recentCategories = [];
+  state.phase = 'preRound';
+
+  // 3) Reconstruire DOM, canvases et scenes
+  buildPlayerUI();
+  rebuildCanvases();
+  rebuildScenes();
+  // Rebrancher le hit-test de clic sur le canvas du joueur humain (canvas[0])
+  attachHumanCanvasHandlers();
+
+  // 4) Lancer le jeu
+  resizeCanvas();
+  resizeFlyCanvas();
+  renderStats();
+  renderHistory();
+  for (let i = 0; i < state.players.length; i++) {
+    updateMatLabel(i);
+  }
+  // Démarrer la boucle d'animation si pas déjà fait
+  if (!state._animStarted) {
+    state._animStarted = true;
+    requestAnimationFrame(animate);
+  }
+  setTimeout(()=> startNewRound(), 400);
+}
+
+// ============================================================
+// MULTIJOUEUR (PeerJS / WebRTC P2P)
+// ============================================================
+// Architecture :
+//   - L'hôte crée la partie : il a un PeerID unique court (ex: "GOD-7K3M9")
+//   - Les invités se connectent à ce PeerID via PeerJS
+//   - L'hôte est l'autorité du jeu : il calcule tout (cartes, dés, IA si besoin)
+//     et envoie l'état + animations aux autres
+//   - Les invités envoient leurs ACTIONS (choix de dés, lancer, sélection,
+//     valider) à l'hôte qui les applique et resync tout le monde
+//
+// Protocole de messages (JSON) :
+//   { type: 'hello',      pseudo }
+//   { type: 'lobby',      players: [{name, isHost, peerId}], hostName }
+//   { type: 'gameStart',  initialState: {...} }
+//   { type: 'sync',       state: {...} }    // resynchronise toute la partie
+//   { type: 'action',     action: '...', payload: {...} }
+//   { type: 'roll',       playerIdx, values, isReroll, rerollIndices }
+//   { type: 'card',       card: {...} }
+//   { type: 'roundEnd',   winner, pot }
+//   { type: 'gameEnd',    scoredPlayers: [...] }
+
+const multi = {
+  enabled: false,        // true si on est en partie multi
+  isHost: false,
+  peer: null,            // instance PeerJS
+  myPeerId: null,
+  hostPeerId: null,      // PeerID de l'hôte (égal à myPeerId si je suis hôte)
+  connections: [],       // [DataConnection, ...] pour l'hôte ; 1 seule connexion pour les invités (vers l'hôte)
+  hostConn: null,        // la connexion vers l'hôte (côté invité)
+  roomCode: null,        // code court partageable (ex: "K3M9X")
+  // Liste des joueurs connectés au lobby (incluant l'hôte) :
+  // chaque joueur { peerId, pseudo, isHost }
+  lobbyPlayers: [],
+  // Mon index dans state.players pendant la partie
+  myPlayerIdx: 0
+};
+
+// ----- Code de salle court (5 caractères alphanumériques sans ambiguïtés) -----
+function generateRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I/O/0/1
+  let code = '';
+  for (let i = 0; i < 5; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+// PeerID = "GOD-{code}" pour avoir un namespace unique
+function codeToPeerId(code) { return 'GOD-' + code.toUpperCase(); }
+
+// ----- UI helpers -----
+function setMultiStatus(elId, message, type = 'info') {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.className = 'welcome-status ' + (type !== 'info' ? type : '');
+  el.innerHTML = message;
+}
+
+function renderHostSlots() {
+  const container = document.getElementById('welcomeSlots');
+  if (!container) return;
+  container.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'welcome-slot';
+    const player = multi.lobbyPlayers[i];
+
+    const num = document.createElement('div');
+    num.className = 'welcome-slot-num';
+    num.textContent = i + 1;
+
+    const name = document.createElement('div');
+    name.className = 'welcome-slot-name';
+
+    if (player) {
+      slot.classList.add('filled');
+      if (player.isHost) slot.classList.add('host');
+      name.textContent = player.pseudo;
+    } else {
+      name.classList.add('empty');
+      name.textContent = 'En attente...';
+    }
+
+    slot.appendChild(num);
+    slot.appendChild(name);
+
+    if (player) {
+      const tag = document.createElement('span');
+      tag.className = 'welcome-slot-tag';
+      if (player.isHost) tag.textContent = 'HÔTE';
+      else if (player.peerId === multi.myPeerId) {
+        tag.textContent = 'TOI';
+        tag.classList.add('you');
+      }
+      else tag.textContent = 'INVITÉ';
+      slot.appendChild(tag);
+    }
+    container.appendChild(slot);
+  }
+  // Activer le bouton "Lancer" si au moins 2 joueurs
+  const startBtn = document.getElementById('welcomeStartMulti');
+  if (startBtn) {
+    startBtn.disabled = multi.lobbyPlayers.length < 2;
+  }
+}
+
+function renderLobbySlots() {
+  const container = document.getElementById('welcomeLobbySlots');
+  if (!container) return;
+  container.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'welcome-slot';
+    const player = multi.lobbyPlayers[i];
+
+    const num = document.createElement('div');
+    num.className = 'welcome-slot-num';
+    num.textContent = i + 1;
+
+    const name = document.createElement('div');
+    name.className = 'welcome-slot-name';
+
+    if (player) {
+      slot.classList.add('filled');
+      if (player.isHost) slot.classList.add('host');
+      name.textContent = player.pseudo;
+    } else {
+      name.classList.add('empty');
+      name.textContent = 'En attente...';
+    }
+
+    slot.appendChild(num);
+    slot.appendChild(name);
+
+    if (player) {
+      const tag = document.createElement('span');
+      tag.className = 'welcome-slot-tag';
+      if (player.isHost) tag.textContent = 'HÔTE';
+      else if (player.peerId === multi.myPeerId) {
+        tag.textContent = 'TOI';
+        tag.classList.add('you');
+      }
+      else tag.textContent = 'INVITÉ';
+      slot.appendChild(tag);
+    }
+    container.appendChild(slot);
+  }
+}
+
+// ----- Création d'une partie (hôte) -----
+function createMultiRoom() {
+  if (typeof Peer === 'undefined') {
+    setMultiStatus('welcomeJoinStatus', '⚠️ PeerJS n\'a pas pu être chargé', 'error');
+    return;
+  }
+  multi.isHost = true;
+  multi.roomCode = generateRoomCode();
+  multi.myPeerId = codeToPeerId(multi.roomCode);
+  multi.hostPeerId = multi.myPeerId;
+
+  // Initialiser PeerJS avec un ID custom
+  multi.peer = new Peer(multi.myPeerId, { debug: 1 });
+
+  multi.peer.on('open', (id) => {
+    console.log('[Multi/Host] Peer ouvert avec ID:', id);
+    // Afficher la vue host avec le code
+    showWelcomeView('welcomeViewHost');
+    document.getElementById('welcomeRoomCode').textContent = multi.roomCode.split('').join(' ');
+    // L'hôte est dans la liste
+    multi.lobbyPlayers = [
+      { peerId: multi.myPeerId, pseudo: gameConfig.humanName, isHost: true }
+    ];
+    renderHostSlots();
+  });
+
+  multi.peer.on('connection', (conn) => {
+    console.log('[Multi/Host] Nouvelle connexion entrante:', conn.peer);
+    multi.connections.push(conn);
+
+    conn.on('open', () => {
+      console.log('[Multi/Host] Connexion ouverte avec', conn.peer);
+    });
+
+    conn.on('data', (data) => handleHostMessage(conn, data));
+
+    conn.on('close', () => {
+      console.log('[Multi/Host] Connexion fermée:', conn.peer);
+      // Retirer de la liste lobby
+      multi.connections = multi.connections.filter(c => c !== conn);
+      multi.lobbyPlayers = multi.lobbyPlayers.filter(p => p.peerId !== conn.peer);
+      renderHostSlots();
+      broadcastLobby();
+      if (multi.enabled && state.phase !== 'gameEnd') {
+        toast(`Un joueur s'est déconnecté`, 'error');
+      }
+    });
+
+    conn.on('error', (err) => {
+      console.error('[Multi/Host] Erreur connexion:', err);
+    });
+  });
+
+  multi.peer.on('error', (err) => {
+    console.error('[Multi/Host] Erreur Peer:', err);
+    if (err.type === 'unavailable-id') {
+      setMultiStatus('welcomeJoinStatus', '⚠️ Une partie avec ce code existe déjà, ré-essaie', 'error');
+    } else {
+      setMultiStatus('welcomeJoinStatus', '⚠️ Erreur réseau : ' + err.type, 'error');
+    }
+  });
+}
+
+// Côté hôte : reçoit un message d'un invité
+function handleHostMessage(conn, msg) {
+  console.log('[Multi/Host] Message reçu:', msg.type, 'de', conn.peer);
+
+  if (msg.type === 'hello') {
+    // Nouvel arrivant : ajouter au lobby si possible (max 4 joueurs)
+    if (multi.lobbyPlayers.length >= 4) {
+      conn.send({ type: 'reject', reason: 'Salon plein (4/4)' });
+      setTimeout(() => conn.close(), 500);
+      return;
+    }
+    if (multi.enabled) {
+      // Partie déjà en cours : refuser
+      conn.send({ type: 'reject', reason: 'Partie déjà en cours' });
+      setTimeout(() => conn.close(), 500);
+      return;
+    }
+    multi.lobbyPlayers.push({
+      peerId: conn.peer,
+      pseudo: msg.pseudo || 'Joueur',
+      isHost: false
+    });
+    renderHostSlots();
+    broadcastLobby();
+    return;
+  }
+
+  if (msg.type === 'action' && multi.enabled) {
+    // Un invité demande une action : appliquer côté hôte
+    handleGuestAction(conn.peer, msg.action, msg.payload);
+    return;
+  }
+}
+
+// L'hôte broadcast la liste du lobby à tous les invités
+function broadcastLobby() {
+  const payload = {
+    type: 'lobby',
+    players: multi.lobbyPlayers.map(p => ({ peerId: p.peerId, pseudo: p.pseudo, isHost: p.isHost })),
+    hostName: gameConfig.humanName
+  };
+  for (const conn of multi.connections) {
+    if (conn.open) conn.send(payload);
+  }
+}
+
+// ----- Rejoindre une partie (invité) -----
+function joinMultiRoom(code) {
+  if (typeof Peer === 'undefined') {
+    setMultiStatus('welcomeJoinStatus', '⚠️ PeerJS n\'a pas pu être chargé', 'error');
+    return;
+  }
+  multi.isHost = false;
+  multi.roomCode = code.toUpperCase();
+  multi.hostPeerId = codeToPeerId(multi.roomCode);
+
+  setMultiStatus('welcomeJoinStatus', 'Connexion à la partie<span class="pulse">...</span>', 'info');
+
+  multi.peer = new Peer(undefined, { debug: 1 });
+
+  multi.peer.on('open', (id) => {
+    console.log('[Multi/Guest] Peer ouvert avec ID:', id);
+    multi.myPeerId = id;
+    // Se connecter à l'hôte
+    const conn = multi.peer.connect(multi.hostPeerId, { reliable: true });
+    multi.hostConn = conn;
+
+    conn.on('open', () => {
+      console.log('[Multi/Guest] Connexion à l\'hôte établie');
+      // Envoyer le hello
+      conn.send({ type: 'hello', pseudo: gameConfig.humanName });
+      // Passer au lobby
+      showWelcomeView('welcomeViewLobby');
+      document.getElementById('welcomeLobbyCode').textContent = multi.roomCode.split('').join(' ');
+      setMultiStatus('welcomeLobbyStatus', 'En attente que l\'hôte lance la partie<span class="pulse">...</span>', 'info');
+    });
+
+    conn.on('data', (data) => handleGuestMessage(data));
+
+    conn.on('close', () => {
+      console.log('[Multi/Guest] Connexion fermée');
+      if (multi.enabled) {
+        // Partie en cours : retour menu
+        toast('L\'hôte a quitté la partie', 'error');
+        leaveMultiRoom();
+        showWelcomeView('welcomeViewMain');
+      } else {
+        setMultiStatus('welcomeLobbyStatus', '⚠️ Connexion perdue', 'error');
+      }
+    });
+
+    conn.on('error', (err) => {
+      console.error('[Multi/Guest] Erreur connexion:', err);
+      setMultiStatus('welcomeJoinStatus', '⚠️ Impossible de rejoindre. Code valide ?', 'error');
+    });
+  });
+
+  multi.peer.on('error', (err) => {
+    console.error('[Multi/Guest] Erreur Peer:', err);
+    if (err.type === 'peer-unavailable') {
+      setMultiStatus('welcomeJoinStatus', '⚠️ Aucune partie trouvée avec ce code', 'error');
+    } else {
+      setMultiStatus('welcomeJoinStatus', '⚠️ Erreur : ' + err.type, 'error');
+    }
+  });
+}
+
+// Côté invité : reçoit un message de l'hôte
+function handleGuestMessage(msg) {
+  console.log('[Multi/Guest] Message reçu:', msg.type);
+
+  switch (msg.type) {
+    case 'reject':
+      setMultiStatus('welcomeJoinStatus', '⚠️ ' + (msg.reason || 'Connexion refusée'), 'error');
+      if (multi.peer) multi.peer.destroy();
+      break;
+
+    case 'lobby':
+      // Mettre à jour la liste affichée
+      multi.lobbyPlayers = msg.players.map(p => ({ ...p }));
+      const hostName = msg.players.find(p => p.isHost)?.pseudo || 'Hôte';
+      const lobbyHostEl = document.getElementById('welcomeLobbyHostName');
+      if (lobbyHostEl) lobbyHostEl.textContent = hostName;
+      renderLobbySlots();
+      break;
+
+    case 'gameStart':
+      // L'hôte a lancé la partie : reconstruire l'état local
+      multi.enabled = true;
+      applyRemoteGameStart(msg.initialState);
+      break;
+
+    case 'sync':
+      // Synchronisation complète de l'état
+      applyRemoteSync(msg.state);
+      break;
+
+    case 'roll':
+      // L'hôte a généré des valeurs de dés : on les applique
+      applyRemoteRoll(msg.playerIdx, msg.values, msg.isReroll, msg.rerollIndices);
+      break;
+
+    case 'card':
+      // L'hôte a tiré une carte (envoyée par ID, pas l'objet)
+      applyRemoteCard(msg.cardId || msg.card);
+      break;
+
+    case 'roundReset':
+      // L'hôte passe à une nouvelle manche : nettoyer les tapis
+      applyRemoteRoundReset(msg.round);
+      break;
+
+    case 'toast':
+      // Message d'événement broadcasté par l'hôte : afficher localement
+      // (utiliser showToast pour éviter de re-broadcaster en boucle)
+      showToast(msg.msg, msg.toastType || 'info');
+      break;
+
+    case 'invalidCross':
+      // L'hôte signale une croix d'invalidation à afficher sur un tapis
+      if (typeof msg.playerIdx === 'number') {
+        showInvalidCross(msg.playerIdx);
+      }
+      break;
+
+    case 'matScore':
+      // L'hôte signale le score final d'un tapis (pour le badge "X pts")
+      if (typeof msg.playerIdx === 'number') {
+        showMatScore(msg.playerIdx, msg.score, msg.valid);
+      }
+      break;
+
+    default:
+      console.warn('[Multi/Guest] Message inconnu:', msg);
+  }
+}
+
+// L'hôte traite une action venant d'un invité
+function handleGuestAction(peerId, action, payload) {
+  // L'invité ne peut agir que pendant son tour
+  const playerIdx = multi.lobbyPlayers.findIndex(p => p.peerId === peerId);
+  if (playerIdx === -1) return;
+  if (state.currentPlayer !== playerIdx) {
+    console.warn('[Multi/Host] Action ignorée : pas le tour de', peerId);
+    return;
+  }
+
+  // Appliquer l'action sur l'hôte (qui est l'autorité)
+  switch (action) {
+    case 'plus':
+      onPlayerPlus(playerIdx);
+      break;
+    case 'minus':
+      onPlayerMinus(playerIdx);
+      break;
+    case 'roll':
+      onPlayerFirstRoll(playerIdx);
+      break;
+    case 'reroll':
+      onPlayerReroll(playerIdx, payload?.indices || []);
+      break;
+    case 'validate':
+      onPlayerValidate(playerIdx);
+      break;
+    case 'next':
+      onPlayerNext();
+      break;
+  }
+}
+
+// Broadcast un message à tous les invités (host)
+function broadcastToGuests(message) {
+  for (const conn of multi.connections) {
+    if (conn.open) conn.send(message);
+  }
+}
+
+// Envoyer une action à l'hôte (côté invité)
+function sendActionToHost(action, payload) {
+  if (!multi.hostConn || !multi.hostConn.open) return;
+  multi.hostConn.send({ type: 'action', action, payload });
+}
+
+// ----- Démarrage de la partie multijoueur -----
+function startMultiplayerGame() {
+  if (!multi.isHost) return;
+  if (multi.lobbyPlayers.length < 2) return;
+
+  multi.enabled = true;
+
+  // Construire la liste des joueurs (tous humains pour le multi)
+  const players = multi.lobbyPlayers.map((p, i) => {
+    const isMe = p.peerId === multi.myPeerId;
+    return makePlayer(p.pseudo, true);
+  });
+  state.players = players;
+  multi.myPlayerIdx = multi.lobbyPlayers.findIndex(p => p.peerId === multi.myPeerId);
+
+  // Reset état de partie
+  state.round = 1;
+  state.currentPlayer = 0;
+  state.turnsThisRound = 0;
+  state.diceInPot = 0;
+  state.recentCardIds = [];
+  state.recentCategories = [];
+  state.phase = 'preRound';
+
+  // Reconstruire UI
+  buildPlayerUI();
+  rebuildCanvases();
+  rebuildScenes();
+  attachHumanCanvasHandlers();
+
+  // Annoncer aux invités
+  const initialState = {
+    players: state.players.map((p, i) => ({
+      name: p.name,
+      dice: p.dice,
+      tokens: p.tokens,
+      peerId: multi.lobbyPlayers[i].peerId
+    })),
+    round: 1
+  };
+  broadcastToGuests({ type: 'gameStart', initialState });
+
+  // Fermer le menu
+  welcomeMenu.classList.add('hidden');
+  setTimeout(()=> { welcomeMenu.style.display = 'none'; }, 600);
+
+  // Lancer le jeu côté hôte
+  resizeCanvas();
+  resizeFlyCanvas();
+  renderStats();
+  renderHistory();
+  for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+  if (!state._animStarted) {
+    state._animStarted = true;
+    requestAnimationFrame(animate);
+  }
+  setTimeout(()=> startNewRound(), 600);
+}
+
+// Côté invité : applique le démarrage de la partie envoyé par l'hôte
+function applyRemoteGameStart(initialState) {
+  // Reconstruire la liste des joueurs
+  const players = initialState.players.map(pData => {
+    const p = makePlayer(pData.name, true);
+    p.dice = pData.dice;
+    p.tokens = pData.tokens;
+    p._peerId = pData.peerId;
+    return p;
+  });
+  state.players = players;
+  multi.myPlayerIdx = initialState.players.findIndex(p => p.peerId === multi.myPeerId);
+
+  state.round = initialState.round || 1;
+  state.currentPlayer = 0;
+  state.turnsThisRound = 0;
+  state.diceInPot = 0;
+  state.phase = 'preRound';
+
+  // Reconstruire UI
+  buildPlayerUI();
+  rebuildCanvases();
+  rebuildScenes();
+  attachHumanCanvasHandlers();
+
+  // Fermer le menu
+  welcomeMenu.classList.add('hidden');
+  setTimeout(()=> { welcomeMenu.style.display = 'none'; }, 600);
+
+  resizeCanvas();
+  resizeFlyCanvas();
+  renderStats();
+  renderHistory();
+  for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+  if (!state._animStarted) {
+    state._animStarted = true;
+    requestAnimationFrame(animate);
+  }
+
+  toast(`La partie commence !`, 'success');
+}
+
+// Côté invité : applique une synchronisation d'état complète
+function applyRemoteSync(syncState) {
+  // Mettre à jour les stats des joueurs
+  if (syncState.players) {
+    syncState.players.forEach((pData, i) => {
+      if (state.players[i]) {
+        Object.assign(state.players[i], pData);
+      }
+    });
+  }
+  if (typeof syncState.round === 'number') state.round = syncState.round;
+  if (typeof syncState.currentPlayer === 'number') state.currentPlayer = syncState.currentPlayer;
+  if (syncState.phase) state.phase = syncState.phase;
+  // La carte arrive par ID seulement (la fonction rule n'est pas sérialisable)
+  if (syncState.currentCardId) {
+    const c = CARDS.find(cc => cc.id === syncState.currentCardId);
+    if (c) state.currentCard = c;
+  } else if (syncState.currentCard && syncState.currentCard.id) {
+    const c = CARDS.find(cc => cc.id === syncState.currentCard.id);
+    if (c) state.currentCard = c;
+  }
+
+  renderStats();
+  for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+
+  // Mettre à jour les boutons d'action selon la phase et qui doit jouer.
+  // L'invité a besoin de savoir si c'est SON tour pour activer +/-/Lancer/Valider.
+  const isMyMove = state.currentPlayer === multi.myPlayerIdx;
+
+  // Toujours afficher le preview des dés du joueur courant pendant la phase
+  // de choix : que ce soit MON tour ou non, je dois voir l'adversaire ajouter
+  // ou retirer ses dés en temps réel.
+  if (state.phase === 'choosing' && typeof state.currentPlayer === 'number') {
+    const curP = state.players[state.currentPlayer];
+    if (curP && curP.chosen > 0) {
+      previewDice(state.currentPlayer, curP.chosen);
+    }
+  }
+
+  if (state.phase === 'choosing' && isMyMove) {
+    setChooseMode(true);
+    updateRollsLeftDisplay(0);
+  } else if (state.phase === 'rerolling' && isMyMove) {
+    const p = state.players[state.currentPlayer];
+    const rollsLeft = MAX_ROLLS - p.rollsUsed;
+    if (rollsLeft > 0) {
+      setRerollMode(true, rollsLeft);
+    } else {
+      setRerollMode(false, 0);
+    }
+    updateRollsLeftDisplay(p.rollsUsed);
+  } else if (state.phase === 'roundEnd') {
+    DOM.chooseSection.style.display = 'none';
+    DOM.rollSection.style.display = 'none';
+    if (multi.isHost) {
+      DOM.btnNext.style.display = 'inline-block';
+      DOM.btnNext.disabled = false;
+    } else {
+      // Les invités attendent que l'hôte valide la transition
+      DOM.btnNext.style.display = 'none';
+    }
+  } else {
+    // Pas mon tour ou autre phase : mode attente
+    setWaitingMode();
+  }
+}
+
+// Côté invité : carte tirée par l'hôte (reçue par ID, on retrouve l'objet local)
+function applyRemoteCard(cardOrId) {
+  // Compatibilité : accepte soit un id (string) soit un objet (legacy)
+  let cardId = (typeof cardOrId === 'string') ? cardOrId : cardOrId?.id;
+  let card = CARDS.find(c => c.id === cardId);
+  if (!card) {
+    console.error('[Multi/Guest] Carte inconnue:', cardId);
+    return;
+  }
+  state.currentCard = card;
+  setCardFace(card);
+  if (DOM.cardDesc) DOM.cardDesc.textContent = card.desc;
+  toast(`Carte: ${card.name}`, 'info');
+}
+
+// Côté invité : l'hôte a démarré une nouvelle manche : nettoyer les tapis
+// pour que la transition visuelle soit propre (pas de dés résiduels de la
+// manche précédente).
+function applyRemoteRoundReset(newRound) {
+  if (typeof newRound === 'number') state.round = newRound;
+  // Reset per-round
+  state.players.forEach(p => {
+    p.score = null;
+    p.valid = true;
+    p.rolled = false;
+    p.rollsUsed = 0;
+    p.currentValues = [];
+  });
+  state.diceInPot = 0;
+  // Vider tous les tapis (clearDice itère sur toutes les scenes)
+  clearDice();
+  hideInvalidCross();
+  hideMatScore();
+  // Reset selection pour tous les tapis
+  for (const scene of scenes) {
+    if (!scene) continue;
+    for (const d of scene.dice) d.selectedForReroll = false;
+  }
+  // Cacher le bouton Next (en attendant l'hôte)
+  if (DOM.btnNext) DOM.btnNext.style.display = 'none';
+  setWaitingMode();
+  renderStats();
+  for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+}
+
+// Côté invité : applique un lancer de dés généré par l'hôte
+function applyRemoteRoll(playerIdx, values, isReroll, rerollIndices) {
+  const player = state.players[playerIdx];
+  if (!player) return;
+
+  if (isReroll && rerollIndices && rerollIndices.length > 0) {
+    // Relance partielle : on remplace seulement les valeurs sélectionnées
+    const newValues = [...player.currentValues];
+    for (let i = 0; i < rerollIndices.length; i++) {
+      newValues[rerollIndices[i]] = values[i];
+    }
+    player.currentValues = newValues;
+  } else {
+    player.currentValues = values;
+  }
+  player.rollsUsed = (player.rollsUsed || 0) + 1;
+
+  // Animation : relancer ces valeurs
+  // (Pour simplifier en V1 : on utilise la même logique que startRoll en local)
+  startRoll(playerIdx, player.currentValues, ()=> {
+    // afterRoll est calculé localement (pour les animations / sons)
+    // mais l'état de validité sera resync par l'hôte si besoin
+  });
+}
+
+// Quitter une partie multi : nettoie tout
+function leaveMultiRoom() {
+  if (multi.peer) {
+    try { multi.peer.destroy(); } catch(e) {}
+  }
+  multi.enabled = false;
+  multi.isHost = false;
+  multi.peer = null;
+  multi.connections = [];
+  multi.hostConn = null;
+  multi.lobbyPlayers = [];
+  multi.roomCode = null;
+}
+
+// ----- Helpers d'actions (côté hôte uniquement) -----
+// Ces fonctions traitent l'action d'un joueur (quel qu'il soit) côté hôte,
+// puis broadcast l'état résultant aux invités.
+function onPlayerPlus(playerIdx) {
+  if (state.phase !== 'choosing' || state.currentPlayer !== playerIdx) return;
+  const p = state.players[playerIdx];
+  if (p.chosen < Math.min(p.dice, CONFIG.maxDicePerRoll)) {
+    p.chosen++;
+    renderStats();
+    previewDice(playerIdx, p.chosen);
+    if (multi.enabled && multi.isHost) broadcastSync();
+  }
+}
+function onPlayerMinus(playerIdx) {
+  if (state.phase !== 'choosing' || state.currentPlayer !== playerIdx) return;
+  const p = state.players[playerIdx];
+  if (p.chosen > 1) {
+    p.chosen--;
+    renderStats();
+    previewDice(playerIdx, p.chosen);
+    if (multi.enabled && multi.isHost) broadcastSync();
+  }
+}
+function onPlayerFirstRoll(playerIdx) {
+  if (state.phase !== 'choosing' || state.currentPlayer !== playerIdx) return;
+  doFirstRoll();
+}
+function onPlayerReroll(playerIdx, indices) {
+  if (state.phase !== 'rerolling' || state.currentPlayer !== playerIdx) return;
+  // Marquer les dés sélectionnés selon les indices reçus
+  if (indices && indices.length > 0) {
+    const scene = scenes[playerIdx];
+    if (scene) {
+      scene.dice.forEach((d, i) => {
+        d.selectedForReroll = indices.includes(i);
+      });
+    }
+  }
+  doReroll();
+}
+function onPlayerValidate(playerIdx) {
+  if (state.phase !== 'rerolling' || state.currentPlayer !== playerIdx) return;
+  validateRoll();
+}
+function onPlayerNext() {
+  if (state.phase !== 'roundEnd') return;
+  if (state.autoNextInterval) {
+    clearInterval(state.autoNextInterval);
+    state.autoNextInterval = null;
+  }
+  if (state.round >= CONFIG.maxRounds) endGame();
+  else goToNextRound();
+}
+
+// Broadcast complet de l'état actuel à tous les invités
+function broadcastSync() {
+  if (!multi.isHost) return;
+  const payload = {
+    type: 'sync',
+    state: {
+      round: state.round,
+      currentPlayer: state.currentPlayer,
+      phase: state.phase,
+      // On envoie l'ID de la carte (pas l'objet) car l'objet contient une fonction
+      // non sérialisable par PeerJS. L'invité retrouve la carte dans CARDS via l'ID.
+      currentCardId: state.currentCard ? state.currentCard.id : null,
+      players: state.players.map(p => ({
+        name: p.name,
+        dice: p.dice,
+        tokens: p.tokens,
+        chosen: p.chosen,
+        score: p.score,
+        valid: p.valid,
+        rolled: p.rolled,
+        rollsUsed: p.rollsUsed,
+        currentValues: p.currentValues
+      }))
+    }
+  };
+  broadcastToGuests(payload);
+}
+
+// ----- Branchement des boutons du menu multi -----
+welcomeBtnMulti.addEventListener('click', ()=> {
+  // Vérifier que PeerJS est dispo
+  if (typeof Peer === 'undefined') {
+    welcomeBtnMulti.animate([
+      { transform: 'translateX(0)' }, { transform: 'translateX(-6px)' },
+      { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }
+    ], { duration: 320, easing: 'ease-out' });
+    return;
+  }
+  // Vérifier qu'il y a un pseudo
+  const pseudo = getCleanPseudo();
+  if (!pseudo || pseudo === 'Joueur') {
+    welcomePseudo.focus();
+    welcomePseudo.animate([
+      { transform: 'translateX(0)' }, { transform: 'translateX(-6px)' },
+      { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }
+    ], { duration: 320, easing: 'ease-out' });
+    return;
+  }
+  gameConfig.humanName = pseudo;
+  showWelcomeView('welcomeViewMultiChoice');
+});
+
+document.getElementById('welcomeBackFromMultiChoice').addEventListener('click', ()=> {
+  showWelcomeView('welcomeViewMain');
+});
+
+// ===========================================================================
+// RECHERCHE RAPIDE (Quick Match) — matchmaking auto sans serveur backend
+// ===========================================================================
+// Principe :
+// - Un salon public unique par taille de partie : GOD-QUICK-2P, -3P, -4P
+// - Le 1er joueur à arriver tente de réserver ce PeerID → devient HÔTE
+//   (s'affiche le statut "En attente de joueurs...")
+// - Les suivants se connectent à ce PeerID → deviennent INVITÉS
+// - L'hôte démarre AUTO la partie quand le slot est plein (size atteint)
+// - Pas de fallback : on attend indéfiniment, l'utilisateur peut Annuler
+// - Si le slot est plein (partie en cours) ou inaccessible → on retente plusieurs
+//   IDs alternatifs : GOD-QUICK-2P-A, -B, -C, etc. pour permettre
+//   plusieurs parties simultanées de la même taille
+
+const QUICK_BACKUP_SUFFIXES = ['', '-A', '-B', '-C', '-D', '-E']; // 6 salons par taille
+const QUICK_PROBE_TIMEOUT = 2500;  // ms avant de juger un slot vide
+
+const quickMatch = {
+  active: false,
+  cancelled: false,
+  desiredSize: 2,         // 2, 3 ou 4 joueurs
+  attemptIdx: 0,          // index dans QUICK_BACKUP_SUFFIXES
+  probePeer: null         // peer temporaire pendant la phase de scan
+};
+
+// Helpers UI
+function setQuickStatus(text, info) {
+  const s = document.getElementById('welcomeQuickStatus');
+  const i = document.getElementById('welcomeQuickInfo');
+  if (s) s.innerHTML = text;
+  if (i && info !== undefined) i.textContent = info;
+}
+
+function setQuickLabel(text) {
+  const el = document.getElementById('welcomeQuickLabel');
+  if (el) el.textContent = text;
+}
+
+/**
+ * Affiche les slots de la salle d'attente (joueurs présents / capacité).
+ */
+function renderQuickSlots() {
+  const container = document.getElementById('welcomeQuickSlots');
+  if (!container) return;
+  container.innerHTML = '';
+  const size = quickMatch.desiredSize;
+  for (let i = 0; i < size; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'welcome-quick-slot';
+    const player = multi.lobbyPlayers[i];
+
+    const icon = document.createElement('div');
+    icon.className = 'welcome-quick-slot-icon';
+    icon.textContent = i + 1;
+
+    const name = document.createElement('div');
+    name.className = 'welcome-quick-slot-name';
+
+    if (player) {
+      slot.classList.add('filled');
+      if (player.peerId === multi.myPeerId) slot.classList.add('you');
+      name.textContent = player.pseudo;
+    } else {
+      name.classList.add('empty');
+      name.textContent = 'En attente...';
+    }
+
+    slot.appendChild(icon);
+    slot.appendChild(name);
+
+    if (player) {
+      const tag = document.createElement('span');
+      tag.className = 'welcome-quick-slot-tag';
+      if (player.peerId === multi.myPeerId) tag.textContent = 'TOI';
+      else if (player.isHost) tag.textContent = 'HÔTE';
+      else tag.textContent = 'JOUEUR';
+      slot.appendChild(tag);
+    }
+    container.appendChild(slot);
+  }
+}
+
+// Démarre la recherche rapide : choix de la taille (vue précédente déjà affichée)
+function startQuickMatch(size) {
+  if (typeof Peer === 'undefined') {
+    toast('PeerJS non chargé', 'error');
+    return;
+  }
+  quickMatch.active = true;
+  quickMatch.cancelled = false;
+  quickMatch.desiredSize = size;
+  quickMatch.attemptIdx = 0;
+
+  showWelcomeView('welcomeViewQuick');
+  setQuickLabel(`Recherche rapide à ${size} joueurs`);
+  setQuickStatus(`Connexion<span class="pulse">...</span>`,
+    `Tu seras connecté à un salon ${size}j`);
+  renderQuickSlots();
+
+  // Démarrer la recherche
+  setTimeout(()=> tryQuickSlot(0), 200);
+}
+
+function cancelQuickMatch() {
+  quickMatch.cancelled = true;
+  quickMatch.active = false;
+  if (quickMatch.probePeer) {
+    try { quickMatch.probePeer.destroy(); } catch(e) {}
+    quickMatch.probePeer = null;
+  }
+  if (multi.peer) {
+    try { multi.peer.destroy(); } catch(e) {}
+    multi.peer = null;
+  }
+  multi.enabled = false;
+  multi.isHost = false;
+  multi.connections = [];
+  multi.lobbyPlayers = [];
+  showWelcomeView('welcomeViewMultiChoice');
+}
+
+/**
+ * Essaye le slot d'index `idx` (suffixe dans QUICK_BACKUP_SUFFIXES).
+ * Si on peut rejoindre → invité. Sinon → tente de devenir hôte.
+ * Si pas possible non plus (course concurrente) → essaye le suivant.
+ */
+function tryQuickSlot(idx) {
+  if (quickMatch.cancelled) return;
+  if (idx >= QUICK_BACKUP_SUFFIXES.length) {
+    // Tous les slots saturés : on boucle vers le 0 après une pause
+    setQuickStatus(`Tous les salons sont pleins<span class="pulse">...</span>`,
+      `Nouvelle tentative dans 3 secondes`);
+    setTimeout(()=> {
+      if (!quickMatch.cancelled) tryQuickSlot(0);
+    }, 3000);
+    return;
+  }
+
+  quickMatch.attemptIdx = idx;
+  const slotPeerId = `GOD-QUICK-${quickMatch.desiredSize}P${QUICK_BACKUP_SUFFIXES[idx]}`;
+
+  setQuickStatus(`Connexion au salon<span class="pulse">...</span>`,
+    `Tentative ${idx + 1}/${QUICK_BACKUP_SUFFIXES.length}`);
+
+  const probe = new Peer(undefined, { debug: 0 });
+  quickMatch.probePeer = probe;
+
+  let resolved = false;
+  let timeoutHandle = null;
+
+  const cleanup = () => {
+    if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+    resolved = true;
+  };
+
+  probe.on('open', () => {
+    if (quickMatch.cancelled) {
+      try { probe.destroy(); } catch(e) {}
+      return;
+    }
+    const conn = probe.connect(slotPeerId, { reliable: true });
+
+    timeoutHandle = setTimeout(() => {
+      if (resolved) return;
+      cleanup();
+      // Pas de réponse → ce slot est vide, on devient l'hôte
+      try { probe.destroy(); } catch(e) {}
+      quickMatch.probePeer = null;
+      if (!quickMatch.cancelled) becomeQuickHost(idx);
+    }, QUICK_PROBE_TIMEOUT);
+
+    conn.on('open', () => {
+      if (resolved) return;
+      cleanup();
+      // L'hôte existe : on devient invité de ce salon
+      multi.peer = probe;
+      multi.myPeerId = probe.id;
+      multi.hostPeerId = slotPeerId;
+      multi.hostConn = conn;
+      multi.isHost = false;
+      multi.roomCode = `QUICK-${quickMatch.desiredSize}P`;
+      multi.connections = [];
+      quickMatch.probePeer = null;
+
+      // Brancher les handlers comme dans joinMultiRoom + intercepter le lobby
+      conn.send({ type: 'hello', pseudo: gameConfig.humanName });
+      conn.on('data', (data) => {
+        // Mettre à jour les slots visibles avant le démarrage de la partie
+        if (data.type === 'lobby') {
+          multi.lobbyPlayers = data.players.map(p => ({ ...p }));
+          renderQuickSlots();
+          const filled = multi.lobbyPlayers.length;
+          const total = quickMatch.desiredSize;
+          setQuickStatus(
+            `${filled}/${total} joueurs dans le salon`,
+            filled < total ? `En attente de ${total - filled} joueur${total-filled>1?'s':''}...` : 'La partie va commencer !'
+          );
+        }
+        if (data.type === 'reject') {
+          setQuickStatus(`⚠️ ${data.reason || 'Salon plein'}`,
+            `On essaye un autre salon...`);
+          try { probe.destroy(); } catch(e) {}
+          quickMatch.probePeer = null;
+          setTimeout(()=> {
+            if (!quickMatch.cancelled) tryQuickSlot(idx + 1);
+          }, 800);
+          return;
+        }
+        handleGuestMessage(data);
+      });
+      conn.on('close', () => {
+        if (multi.enabled) {
+          toast('L\'hôte a quitté la partie', 'error');
+          leaveMultiRoom();
+          showWelcomeView('welcomeViewMain');
+        } else if (!quickMatch.cancelled) {
+          // Si on était en attente et que l'hôte ferme → recommencer recherche
+          setQuickStatus(`L'hôte a quitté, nouvelle recherche...`, '');
+          setTimeout(()=> tryQuickSlot(0), 500);
+        }
+      });
+      setQuickStatus(`Connecté ! En attente des autres joueurs<span class="pulse">...</span>`,
+        `Salon rapide ${quickMatch.desiredSize}j`);
+    });
+
+    conn.on('error', (err) => {
+      if (resolved) return;
+      cleanup();
+      try { probe.destroy(); } catch(e) {}
+      quickMatch.probePeer = null;
+      if (!quickMatch.cancelled) becomeQuickHost(idx);
+    });
+  });
+
+  probe.on('error', (err) => {
+    if (resolved) return;
+    if (err.type === 'peer-unavailable') {
+      cleanup();
+      try { probe.destroy(); } catch(e) {}
+      quickMatch.probePeer = null;
+      if (!quickMatch.cancelled) becomeQuickHost(idx);
+    } else {
+      console.warn('[QuickMatch] Erreur probe:', err);
+    }
+  });
+}
+
+/**
+ * Devient l'hôte du slot d'index `idx` en réservant son PeerID prévisible.
+ * Si l'ID est pris (course) → essaye le slot suivant.
+ */
+function becomeQuickHost(idx) {
+  if (quickMatch.cancelled) return;
+  const slotPeerId = `GOD-QUICK-${quickMatch.desiredSize}P${QUICK_BACKUP_SUFFIXES[idx]}`;
+
+  setQuickStatus(`Tu es l'hôte ! En attente d'autres joueurs<span class="pulse">...</span>`,
+    `Salon rapide ${quickMatch.desiredSize}j — partage le lien si besoin`);
+
+  multi.isHost = true;
+  multi.roomCode = `QUICK-${quickMatch.desiredSize}P`;
+  multi.myPeerId = slotPeerId;
+  multi.hostPeerId = slotPeerId;
+  multi.connections = [];
+  multi.lobbyPlayers = [];
+
+  multi.peer = new Peer(slotPeerId, { debug: 0 });
+
+  multi.peer.on('open', (id) => {
+    console.log('[QuickMatch/Host] Slot', idx, 'réservé en tant qu\'hôte:', id);
+    multi.lobbyPlayers = [
+      { peerId: id, pseudo: gameConfig.humanName, isHost: true }
+    ];
+    renderQuickSlots();
+  });
+
+  multi.peer.on('connection', (conn) => {
+    console.log('[QuickMatch/Host] Nouveau joueur arrive:', conn.peer);
+
+    // Refuser les connexions au-delà de la taille demandée
+    if (multi.lobbyPlayers.length >= quickMatch.desiredSize) {
+      conn.send({ type: 'reject', reason: `Salon plein (${quickMatch.desiredSize}/${quickMatch.desiredSize})` });
+      setTimeout(() => conn.close(), 500);
+      return;
+    }
+    if (multi.enabled) {
+      conn.send({ type: 'reject', reason: 'Partie déjà en cours' });
+      setTimeout(() => conn.close(), 500);
+      return;
+    }
+
+    multi.connections.push(conn);
+
+    conn.on('data', (data) => {
+      handleHostMessage(conn, data);
+      // Auto-démarrage : dès que le salon est plein → on lance la partie
+      if (data.type === 'hello'
+          && multi.lobbyPlayers.length === quickMatch.desiredSize
+          && !multi.enabled) {
+        renderQuickSlots();
+        setQuickStatus(`✅ Salon plein ! La partie commence<span class="pulse">...</span>`,
+          ``);
+        setTimeout(() => {
+          if (!quickMatch.cancelled) startMultiplayerGame();
+        }, 1200);
+      } else if (data.type === 'hello') {
+        renderQuickSlots();
+        const filled = multi.lobbyPlayers.length;
+        const total = quickMatch.desiredSize;
+        setQuickStatus(
+          `${filled}/${total} joueurs dans le salon`,
+          `En attente de ${total - filled} joueur${total-filled>1?'s':''}...`
+        );
+      }
+    });
+
+    conn.on('close', () => {
+      multi.connections = multi.connections.filter(c => c !== conn);
+      multi.lobbyPlayers = multi.lobbyPlayers.filter(p => p.peerId !== conn.peer);
+      renderQuickSlots();
+      if (multi.enabled && state.phase !== 'gameEnd') {
+        toast('Un joueur s\'est déconnecté', 'error');
+      } else if (!multi.enabled) {
+        setQuickStatus(`En attente d'autres joueurs<span class="pulse">...</span>`,
+          `${multi.lobbyPlayers.length}/${quickMatch.desiredSize} joueurs`);
+      }
+    });
+  });
+
+  multi.peer.on('error', (err) => {
+    console.warn('[QuickMatch/Host] Erreur slot', idx, ':', err.type);
+    if (err.type === 'unavailable-id') {
+      // Collision : essayer le slot suivant
+      try { multi.peer.destroy(); } catch(e) {}
+      multi.peer = null;
+      if (!quickMatch.cancelled) {
+        setTimeout(() => tryQuickSlot(idx + 1), 400);
+      }
+    }
+  });
+}
+
+// ----- Listeners boutons UI -----
+document.getElementById('welcomeBtnQuick').addEventListener('click', ()=> {
+  // D'abord la vue de choix de taille
+  showWelcomeView('welcomeViewQuickSize');
+});
+
+document.getElementById('welcomeBackFromQuickSize').addEventListener('click', ()=> {
+  showWelcomeView('welcomeViewMultiChoice');
+});
+
+// Sélection de la taille → démarre la recherche
+document.querySelectorAll('.welcome-quick-size-btn').forEach(btn => {
+  btn.addEventListener('click', ()=> {
+    const size = parseInt(btn.dataset.size, 10);
+    startQuickMatch(size);
+  });
+});
+
+document.getElementById('welcomeBtnCancelQuick').addEventListener('click', ()=> {
+  cancelQuickMatch();
+});
+
+document.getElementById('welcomeBtnCreate').addEventListener('click', ()=> {
+  createMultiRoom();
+});
+
+document.getElementById('welcomeBtnJoin').addEventListener('click', ()=> {
+  showWelcomeView('welcomeViewJoin');
+  setTimeout(()=> document.getElementById('welcomeJoinCode').focus(), 100);
+});
+
+document.getElementById('welcomeBackFromJoin').addEventListener('click', ()=> {
+  showWelcomeView('welcomeViewMultiChoice');
+});
+
+document.getElementById('welcomeBackFromHost').addEventListener('click', ()=> {
+  if (confirm('Quitter le salon ? Les invités seront déconnectés.')) {
+    leaveMultiRoom();
+    showWelcomeView('welcomeViewMain');
+  }
+});
+
+document.getElementById('welcomeBackFromLobby').addEventListener('click', ()=> {
+  if (confirm('Quitter le salon ?')) {
+    leaveMultiRoom();
+    showWelcomeView('welcomeViewMain');
+  }
+});
+
+document.getElementById('welcomeBtnDoJoin').addEventListener('click', ()=> {
+  const codeInput = document.getElementById('welcomeJoinCode');
+  const code = (codeInput.value || '').trim().toUpperCase();
+  if (code.length < 4) {
+    setMultiStatus('welcomeJoinStatus', '⚠️ Code trop court', 'error');
+    return;
+  }
+  joinMultiRoom(code);
+});
+
+document.getElementById('welcomeJoinCode').addEventListener('input', (e)=> {
+  // Force majuscules
+  e.target.value = e.target.value.toUpperCase();
+});
+
+document.getElementById('welcomeJoinCode').addEventListener('keypress', (e)=> {
+  if (e.key === 'Enter') document.getElementById('welcomeBtnDoJoin').click();
+});
+
+document.getElementById('welcomeCopyCode').addEventListener('click', async ()=> {
+  const btn = document.getElementById('welcomeCopyCode');
+  try {
+    await navigator.clipboard.writeText(multi.roomCode || '');
+    btn.textContent = '✓ Copié !';
+    btn.classList.add('copied');
+    setTimeout(()=> {
+      btn.textContent = '📋 Copier le code';
+      btn.classList.remove('copied');
+    }, 1500);
+  } catch(e) {
+    // Fallback : sélection
+    const codeEl = document.getElementById('welcomeRoomCode');
+    const range = document.createRange();
+    range.selectNodeContents(codeEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+});
+
+document.getElementById('welcomeStartMulti').addEventListener('click', ()=> {
+  startMultiplayerGame();
+});
+
+// Helper : afficher une vue, masquer les autres
+function showWelcomeView(viewId) {
+  const views = ['welcomeViewMain', 'welcomeViewSolo', 'welcomeViewMultiChoice',
+                 'welcomeViewHost', 'welcomeViewJoin', 'welcomeViewLobby',
+                 'welcomeViewQuickSize', 'welcomeViewQuick'];
+  for (const id of views) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = (id === viewId) ? 'block' : 'none';
+  }
+}
+
+function init() {
+  // Préparer le canvas de vol (plein écran), le menu s'affiche en attendant
+  resizeFlyCanvas();
+  setTimeout(()=> welcomePseudo.focus(), 200);
+}
+
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
