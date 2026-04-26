@@ -2141,10 +2141,12 @@ function playSound() {
     const a = soundPool[soundPoolIdx];
     soundPoolIdx = (soundPoolIdx + 1) % SOUND_POOL_SIZE;
     a.currentTime = 0;
+    a.volume = 0.55; // s'assurer que le volume est bien restauré
     const p = a.play();
     if (p && p.catch) {
       p.catch((err)=>{
-        // Autoplay bloqué : on retente l'unlock pour la prochaine fois
+        // Autoplay bloqué : on garde audioUnlocked à false pour
+        // retenter à la prochaine interaction
         if (err && err.name === 'NotAllowedError') {
           audioUnlocked = false;
         }
@@ -2154,37 +2156,38 @@ function playSound() {
 }
 
 // Navigateurs bloquent l'autoplay tant que l'user n'a pas interagi.
-// Au premier clic / touch / keypress n'importe où, on "déverrouille" en jouant un son silencieux.
+// Au premier clic/touch/keypress, on "déverrouille" en jouant un son silencieux
+// puis en le coupant immédiatement.
+// IMPORTANT : on n'utilise QU'UN SEUL son du pool pour l'unlock (le dernier
+// du pool, indice SOUND_POOL_SIZE-1) afin de ne pas perturber les autres
+// qui peuvent être joués en même temps par playSound().
 function unlockAudio() {
   if (audioUnlocked) return;
-  // Test : essayer de jouer un son à volume 0
-  let unlockedSomething = false;
-  for (const a of soundPool) {
-    try {
-      const savedVol = a.volume;
-      a.volume = 0;
-      const p = a.play();
-      if (p && p.then) {
-        p.then(()=>{
-          a.pause();
-          a.currentTime = 0;
-          a.volume = savedVol;
-          unlockedSomething = true;
-        }).catch(()=>{
-          a.volume = savedVol;
-        });
-      } else {
+  audioUnlocked = true; // optimiste : on assume que ça va marcher
+  try {
+    const a = soundPool[soundPoolIdx]; // le prochain qui sera utilisé
+    a.volume = 0;
+    const p = a.play();
+    const cleanup = () => {
+      try {
         a.pause();
         a.currentTime = 0;
-        a.volume = savedVol;
-        unlockedSomething = true;
-      }
-    } catch(e) {}
+        a.volume = 0.55;
+      } catch(e) {}
+    };
+    if (p && p.then) {
+      p.then(cleanup).catch(()=>{
+        a.volume = 0.55;
+        audioUnlocked = false; // raté, on retentera
+      });
+    } else {
+      cleanup();
+    }
+  } catch(e) {
+    audioUnlocked = false;
   }
-  if (unlockedSomething) audioUnlocked = true;
 }
 // Pas { once: true } : on retente à chaque interaction tant que pas confirmé.
-// Capture pour intercepter avant tout handler qui aurait stopPropagation.
 ['click', 'touchstart', 'touchend', 'keydown', 'pointerdown'].forEach(ev => {
   document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
 });
@@ -3254,23 +3257,66 @@ function animateFlyScene(ts) {
 }
 
 function layoutTargets(playerIdx, n) {
-  // Return target (x,y) positions within the player's canvas (centered)
+  // Calcule des positions (x,y) dans le canvas du joueur, centrées,
+  // avec un espacement garanti entre les dés (pas de chevauchement).
   const rect = canvases[playerIdx].getBoundingClientRect();
   const cx = rect.width / 2;
-  const cy = rect.height / 2 + 10;
-  // Spacing adapté à la taille des dés (72/48/40 selon le viewport)
+  const cy = rect.height / 2 + 8;
   const dieSize = getDieSize();
-  const minSpacing = dieSize + 10; // un peu de marge entre les dés
-  const spacing = Math.min(minSpacing, rect.width / (Math.min(n,4)+1.2));
-  const cols = Math.min(n, 4);
+
+  // Espacement minimum souhaité entre les CENTRES de 2 dés voisins :
+  // taille du dé + une petite marge visuelle.
+  const minSpacing = dieSize + 8;
+
+  // Marge intérieure du tapis (le canvas a un padding-top sur mobile aussi)
+  const padX = dieSize * 0.55;
+  const padY = dieSize * 0.55;
+
+  // Combien de colonnes peut-on tenir avec ce minSpacing ?
+  // largeur dispo = rect.width - 2*padX, on doit y caser (cols-1)*minSpacing + dieSize
+  const availW = Math.max(0, rect.width - 2 * padX);
+  let maxColsByWidth = Math.floor((availW - dieSize) / minSpacing) + 1;
+  if (maxColsByWidth < 1) maxColsByWidth = 1;
+  // Plafond : on ne fait jamais plus de 4 colonnes même si la place existe
+  // (pour rester lisible) ; et jamais plus que n
+  const cols = Math.max(1, Math.min(n, 4, maxColsByWidth));
   const rows = Math.ceil(n / cols);
+
+  // Spacing X et Y : si on a peu de dés sur la largeur, on les espace plus.
+  // On répartit dans la zone dispo en partant du minSpacing.
+  let spacingX = minSpacing;
+  let spacingY = minSpacing;
+  // Si l'espace dispo est plus grand que minimal × (cols-1), on étire un peu
+  // (mais sans dépasser ~1.4x le minSpacing pour éviter les dés trop écartés)
+  if (cols > 1) {
+    const idealX = availW / (cols - 0.2); // un peu d'air sur les bords
+    spacingX = Math.max(minSpacing, Math.min(idealX, minSpacing * 1.4));
+  }
+  if (rows > 1) {
+    const availH = Math.max(0, rect.height - 2 * padY);
+    const idealY = availH / (rows - 0.2);
+    spacingY = Math.max(minSpacing, Math.min(idealY, minSpacing * 1.4));
+  }
+
+  // Randomisation très légère (max 3px) pour donner un look "lancé naturel"
+  // sans risquer le chevauchement.
+  const jitter = Math.min(3, (spacingX - minSpacing) / 4);
+
   const targets = [];
-  for (let i=0;i<n;i++) {
-    const col = i % cols;
-    const row = Math.floor(i/cols);
-    const tx = cx + (col - (cols-1)/2)*spacing + (Math.random()-0.5)*8;
-    const ty = cy + (row - (rows-1)/2)*spacing + (Math.random()-0.5)*8;
-    targets.push([tx,ty]);
+  for (let i = 0; i < n; i++) {
+    // Pour la dernière rangée incomplète, on centre les dés
+    const isLastRow = Math.floor(i / cols) === rows - 1;
+    const colsInThisRow = isLastRow ? (n - (rows - 1) * cols) : cols;
+    const colInRow = i - Math.floor(i / cols) * cols;
+    const row = Math.floor(i / cols);
+
+    const tx = cx
+      + (colInRow - (colsInThisRow - 1) / 2) * spacingX
+      + (Math.random() - 0.5) * jitter * 2;
+    const ty = cy
+      + (row - (rows - 1) / 2) * spacingY
+      + (Math.random() - 0.5) * jitter * 2;
+    targets.push([tx, ty]);
   }
   return { cx, cy, targets };
 }
