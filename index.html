@@ -1465,31 +1465,7 @@
     </div>
 
     <!-- Vue 7 : Recherche rapide en cours -->
-    <!-- Vue 7a : Choix de la taille de partie pour la recherche rapide -->
-    <div class="welcome-view" id="welcomeViewQuickSize" style="display:none;">
-      <div class="welcome-section">
-        <label class="welcome-label">Recherche rapide — combien de joueurs ?</label>
-        <div class="welcome-ai-grid">
-          <button class="welcome-quick-size-btn" data-size="2">
-            <div class="welcome-ai-num">2</div>
-            <div class="welcome-ai-desc">Joueurs</div>
-          </button>
-          <button class="welcome-quick-size-btn" data-size="3">
-            <div class="welcome-ai-num">3</div>
-            <div class="welcome-ai-desc">Joueurs</div>
-          </button>
-          <button class="welcome-quick-size-btn" data-size="4">
-            <div class="welcome-ai-num">4</div>
-            <div class="welcome-ai-desc">Joueurs</div>
-          </button>
-        </div>
-      </div>
-      <div class="welcome-actions">
-        <button class="welcome-back-btn" id="welcomeBackFromQuickSize">← Retour</button>
-      </div>
-    </div>
-
-    <!-- Vue 7b : Recherche rapide en cours -->
+    <!-- Vue 7 : Recherche rapide en cours -->
     <div class="welcome-view" id="welcomeViewQuick" style="display:none;">
       <div class="welcome-section">
         <label class="welcome-label" id="welcomeQuickLabel">Recherche d'un adversaire</label>
@@ -1498,7 +1474,7 @@
           <div class="welcome-quick-spinner-pulse"></div>
         </div>
         <div class="welcome-quick-status" id="welcomeQuickStatus">
-          Recherche en cours<span class="pulse">...</span>
+          Connexion<span class="pulse">...</span>
         </div>
         <div class="welcome-quick-info" id="welcomeQuickInfo">
           On scanne les serveurs pour te trouver des adversaires
@@ -1509,6 +1485,7 @@
       </div>
       <div class="welcome-actions">
         <button class="welcome-back-btn" id="welcomeBtnCancelQuick">✕ Annuler</button>
+        <button class="welcome-launch-btn" id="welcomeBtnQuickStart" style="display:none;">Lancer la partie ▶</button>
       </div>
     </div>
 
@@ -3317,16 +3294,23 @@ bossImg.onerror = (e) => { console.error('[ERREUR] boss.png ne peut pas être ch
 bossImg.src = 'images/boss.png';
 
 function setCardFace(card) {
-  // Compute scale so one tile fits the card face
-  const scaleX = CARD_SHEET.displayW / CARD_SHEET.tileW;
-  const scaleY = CARD_SHEET.displayH / CARD_SHEET.tileH;
-  // Use background-size = full sheet scaled
-  const bgW = CARD_SHEET.cols * CARD_SHEET.tileW * scaleX;
-  const bgH = CARD_SHEET.rows * CARD_SHEET.tileH * scaleY;
-  DOM.cardFront.style.backgroundSize = `${bgW}px ${bgH}px`;
-  const px = -card.sx * CARD_SHEET.tileW * scaleX;
-  const py = -card.sy * CARD_SHEET.tileH * scaleY;
-  DOM.cardFront.style.backgroundPosition = `${px}px ${py}px`;
+  // On utilise des pourcentages pour que la carte s'adapte à la taille du
+  // conteneur (différente sur mobile, tablet, desktop).
+  // - backgroundSize en % : largeur = (cols × 100)% pour la sprite complète
+  //                         hauteur = (rows × 100)%
+  // - backgroundPosition en % : décalage relatif à la grille
+  //   (cf https://developer.mozilla.org/en-US/docs/Web/CSS/background-position)
+  const cols = CARD_SHEET.cols;
+  const rows = CARD_SHEET.rows;
+  const bgW = cols * 100;  // ex: 700% pour 7 colonnes
+  const bgH = rows * 100;  // ex: 300% pour 3 rangées
+  // Position en pourcentage : pour la tile (sx, sy), il faut placer la sprite
+  // de telle sorte que cette tile soit visible.
+  // Formule : pos% = sx / (cols - 1) × 100 (idem pour Y)
+  const px = (cols > 1) ? (card.sx / (cols - 1)) * 100 : 0;
+  const py = (rows > 1) ? (card.sy / (rows - 1)) * 100 : 0;
+  DOM.cardFront.style.backgroundSize = `${bgW}% ${bgH}%`;
+  DOM.cardFront.style.backgroundPosition = `${px}% ${py}%`;
 
   // Textual fallback overlay in case image doesn't load
   if (!cardsImgLoaded) {
@@ -5389,25 +5373,24 @@ document.getElementById('welcomeBackFromMultiChoice').addEventListener('click', 
 // RECHERCHE RAPIDE (Quick Match) — matchmaking auto sans serveur backend
 // ===========================================================================
 // Principe :
-// - Un salon public unique par taille de partie : GOD-QUICK-2P, -3P, -4P
-// - Le 1er joueur à arriver tente de réserver ce PeerID → devient HÔTE
-//   (s'affiche le statut "En attente de joueurs...")
-// - Les suivants se connectent à ce PeerID → deviennent INVITÉS
-// - L'hôte démarre AUTO la partie quand le slot est plein (size atteint)
-// - Pas de fallback : on attend indéfiniment, l'utilisateur peut Annuler
-// - Si le slot est plein (partie en cours) ou inaccessible → on retente plusieurs
-//   IDs alternatifs : GOD-QUICK-2P-A, -B, -C, etc. pour permettre
-//   plusieurs parties simultanées de la même taille
+// - 1 seul salon public commun de 4 slots maximum : GOD-QUICK-LOBBY
+//   (avec 5 IDs de secours si le principal est plein/inaccessible)
+// - 1er arrivé tente de réserver l'ID → devient HÔTE, attend les autres
+// - Suivants se connectent → deviennent INVITÉS
+// - L'hôte voit le bouton "Lancer la partie" dès qu'il y a 2+ joueurs
+// - Si le salon atteint 4 joueurs → la partie démarre automatiquement
+// - Pas de fallback automatique : on attend indéfiniment, juste bouton Annuler
 
-const QUICK_BACKUP_SUFFIXES = ['', '-A', '-B', '-C', '-D', '-E']; // 6 salons par taille
-const QUICK_PROBE_TIMEOUT = 2500;  // ms avant de juger un slot vide
+const QUICK_BACKUP_SUFFIXES = ['', '-A', '-B', '-C', '-D', '-E']; // 6 salons possibles
+const QUICK_PROBE_TIMEOUT = 2500;
+const QUICK_MAX_PLAYERS = 4;
+const QUICK_MIN_PLAYERS = 2;
 
 const quickMatch = {
   active: false,
   cancelled: false,
-  desiredSize: 2,         // 2, 3 ou 4 joueurs
-  attemptIdx: 0,          // index dans QUICK_BACKUP_SUFFIXES
-  probePeer: null         // peer temporaire pendant la phase de scan
+  attemptIdx: 0,         // index dans QUICK_BACKUP_SUFFIXES
+  probePeer: null
 };
 
 // Helpers UI
@@ -5424,14 +5407,13 @@ function setQuickLabel(text) {
 }
 
 /**
- * Affiche les slots de la salle d'attente (joueurs présents / capacité).
+ * Affiche les slots de la salle d'attente (jusqu'à 4 joueurs).
  */
 function renderQuickSlots() {
   const container = document.getElementById('welcomeQuickSlots');
   if (!container) return;
   container.innerHTML = '';
-  const size = quickMatch.desiredSize;
-  for (let i = 0; i < size; i++) {
+  for (let i = 0; i < QUICK_MAX_PLAYERS; i++) {
     const slot = document.createElement('div');
     slot.className = 'welcome-quick-slot';
     const player = multi.lobbyPlayers[i];
@@ -5449,7 +5431,7 @@ function renderQuickSlots() {
       name.textContent = player.pseudo;
     } else {
       name.classList.add('empty');
-      name.textContent = 'En attente...';
+      name.textContent = 'Slot libre';
     }
 
     slot.appendChild(icon);
@@ -5465,26 +5447,37 @@ function renderQuickSlots() {
     }
     container.appendChild(slot);
   }
+
+  // Bouton "Lancer la partie" : visible uniquement pour l'hôte avec ≥ 2 joueurs
+  const startBtn = document.getElementById('welcomeBtnQuickStart');
+  if (startBtn) {
+    if (multi.isHost && multi.lobbyPlayers.length >= QUICK_MIN_PLAYERS && !multi.enabled) {
+      startBtn.style.display = 'inline-block';
+      startBtn.disabled = false;
+    } else {
+      startBtn.style.display = 'none';
+    }
+  }
 }
 
-// Démarre la recherche rapide : choix de la taille (vue précédente déjà affichée)
-function startQuickMatch(size) {
+// Démarre la recherche rapide
+function startQuickMatch() {
   if (typeof Peer === 'undefined') {
     toast('PeerJS non chargé', 'error');
     return;
   }
   quickMatch.active = true;
   quickMatch.cancelled = false;
-  quickMatch.desiredSize = size;
   quickMatch.attemptIdx = 0;
 
   showWelcomeView('welcomeViewQuick');
-  setQuickLabel(`Recherche rapide à ${size} joueurs`);
+  setQuickLabel('Recherche rapide');
   setQuickStatus(`Connexion<span class="pulse">...</span>`,
-    `Tu seras connecté à un salon ${size}j`);
+    `Recherche d'une partie publique`);
+  // Reset slots pendant la recherche
+  multi.lobbyPlayers = [];
   renderQuickSlots();
 
-  // Démarrer la recherche
   setTimeout(()=> tryQuickSlot(0), 200);
 }
 
@@ -5507,14 +5500,12 @@ function cancelQuickMatch() {
 }
 
 /**
- * Essaye le slot d'index `idx` (suffixe dans QUICK_BACKUP_SUFFIXES).
- * Si on peut rejoindre → invité. Sinon → tente de devenir hôte.
- * Si pas possible non plus (course concurrente) → essaye le suivant.
+ * Essaye le slot d'index `idx`. Si on peut rejoindre → invité. Sinon hôte.
  */
 function tryQuickSlot(idx) {
   if (quickMatch.cancelled) return;
   if (idx >= QUICK_BACKUP_SUFFIXES.length) {
-    // Tous les slots saturés : on boucle vers le 0 après une pause
+    // Tous saturés : on retente le slot 0 après pause
     setQuickStatus(`Tous les salons sont pleins<span class="pulse">...</span>`,
       `Nouvelle tentative dans 3 secondes`);
     setTimeout(()=> {
@@ -5524,9 +5515,9 @@ function tryQuickSlot(idx) {
   }
 
   quickMatch.attemptIdx = idx;
-  const slotPeerId = `GOD-QUICK-${quickMatch.desiredSize}P${QUICK_BACKUP_SUFFIXES[idx]}`;
+  const slotPeerId = `GOD-QUICK-LOBBY${QUICK_BACKUP_SUFFIXES[idx]}`;
 
-  setQuickStatus(`Connexion au salon<span class="pulse">...</span>`,
+  setQuickStatus(`Connexion<span class="pulse">...</span>`,
     `Tentative ${idx + 1}/${QUICK_BACKUP_SUFFIXES.length}`);
 
   const probe = new Peer(undefined, { debug: 0 });
@@ -5550,7 +5541,6 @@ function tryQuickSlot(idx) {
     timeoutHandle = setTimeout(() => {
       if (resolved) return;
       cleanup();
-      // Pas de réponse → ce slot est vide, on devient l'hôte
       try { probe.destroy(); } catch(e) {}
       quickMatch.probePeer = null;
       if (!quickMatch.cancelled) becomeQuickHost(idx);
@@ -5559,28 +5549,27 @@ function tryQuickSlot(idx) {
     conn.on('open', () => {
       if (resolved) return;
       cleanup();
-      // L'hôte existe : on devient invité de ce salon
+      // Salon trouvé : on devient invité
       multi.peer = probe;
       multi.myPeerId = probe.id;
       multi.hostPeerId = slotPeerId;
       multi.hostConn = conn;
       multi.isHost = false;
-      multi.roomCode = `QUICK-${quickMatch.desiredSize}P`;
+      multi.roomCode = `QUICK`;
       multi.connections = [];
       quickMatch.probePeer = null;
 
-      // Brancher les handlers comme dans joinMultiRoom + intercepter le lobby
       conn.send({ type: 'hello', pseudo: gameConfig.humanName });
       conn.on('data', (data) => {
-        // Mettre à jour les slots visibles avant le démarrage de la partie
         if (data.type === 'lobby') {
           multi.lobbyPlayers = data.players.map(p => ({ ...p }));
           renderQuickSlots();
           const filled = multi.lobbyPlayers.length;
-          const total = quickMatch.desiredSize;
           setQuickStatus(
-            `${filled}/${total} joueurs dans le salon`,
-            filled < total ? `En attente de ${total - filled} joueur${total-filled>1?'s':''}...` : 'La partie va commencer !'
+            `${filled}/${QUICK_MAX_PLAYERS} joueurs dans le salon`,
+            filled < QUICK_MAX_PLAYERS
+              ? `L'hôte peut lancer la partie à tout moment`
+              : `Salon plein ! La partie va commencer`
           );
         }
         if (data.type === 'reject') {
@@ -5601,13 +5590,12 @@ function tryQuickSlot(idx) {
           leaveMultiRoom();
           showWelcomeView('welcomeViewMain');
         } else if (!quickMatch.cancelled) {
-          // Si on était en attente et que l'hôte ferme → recommencer recherche
           setQuickStatus(`L'hôte a quitté, nouvelle recherche...`, '');
           setTimeout(()=> tryQuickSlot(0), 500);
         }
       });
-      setQuickStatus(`Connecté ! En attente des autres joueurs<span class="pulse">...</span>`,
-        `Salon rapide ${quickMatch.desiredSize}j`);
+      setQuickStatus(`Connecté ! En attente de l'hôte<span class="pulse">...</span>`,
+        ``);
     });
 
     conn.on('error', (err) => {
@@ -5633,18 +5621,17 @@ function tryQuickSlot(idx) {
 }
 
 /**
- * Devient l'hôte du slot d'index `idx` en réservant son PeerID prévisible.
- * Si l'ID est pris (course) → essaye le slot suivant.
+ * Devient l'hôte du slot d'index `idx`.
  */
 function becomeQuickHost(idx) {
   if (quickMatch.cancelled) return;
-  const slotPeerId = `GOD-QUICK-${quickMatch.desiredSize}P${QUICK_BACKUP_SUFFIXES[idx]}`;
+  const slotPeerId = `GOD-QUICK-LOBBY${QUICK_BACKUP_SUFFIXES[idx]}`;
 
   setQuickStatus(`Tu es l'hôte ! En attente d'autres joueurs<span class="pulse">...</span>`,
-    `Salon rapide ${quickMatch.desiredSize}j — partage le lien si besoin`);
+    `Lance la partie quand vous êtes au moins 2`);
 
   multi.isHost = true;
-  multi.roomCode = `QUICK-${quickMatch.desiredSize}P`;
+  multi.roomCode = `QUICK`;
   multi.myPeerId = slotPeerId;
   multi.hostPeerId = slotPeerId;
   multi.connections = [];
@@ -5653,7 +5640,7 @@ function becomeQuickHost(idx) {
   multi.peer = new Peer(slotPeerId, { debug: 0 });
 
   multi.peer.on('open', (id) => {
-    console.log('[QuickMatch/Host] Slot', idx, 'réservé en tant qu\'hôte:', id);
+    console.log('[QuickMatch/Host] Réservé en tant qu\'hôte:', id);
     multi.lobbyPlayers = [
       { peerId: id, pseudo: gameConfig.humanName, isHost: true }
     ];
@@ -5661,11 +5648,10 @@ function becomeQuickHost(idx) {
   });
 
   multi.peer.on('connection', (conn) => {
-    console.log('[QuickMatch/Host] Nouveau joueur arrive:', conn.peer);
+    console.log('[QuickMatch/Host] Nouveau joueur:', conn.peer);
 
-    // Refuser les connexions au-delà de la taille demandée
-    if (multi.lobbyPlayers.length >= quickMatch.desiredSize) {
-      conn.send({ type: 'reject', reason: `Salon plein (${quickMatch.desiredSize}/${quickMatch.desiredSize})` });
+    if (multi.lobbyPlayers.length >= QUICK_MAX_PLAYERS) {
+      conn.send({ type: 'reject', reason: `Salon plein (${QUICK_MAX_PLAYERS}/${QUICK_MAX_PLAYERS})` });
       setTimeout(() => conn.close(), 500);
       return;
     }
@@ -5679,24 +5665,23 @@ function becomeQuickHost(idx) {
 
     conn.on('data', (data) => {
       handleHostMessage(conn, data);
-      // Auto-démarrage : dès que le salon est plein → on lance la partie
-      if (data.type === 'hello'
-          && multi.lobbyPlayers.length === quickMatch.desiredSize
-          && !multi.enabled) {
-        renderQuickSlots();
-        setQuickStatus(`✅ Salon plein ! La partie commence<span class="pulse">...</span>`,
-          ``);
-        setTimeout(() => {
-          if (!quickMatch.cancelled) startMultiplayerGame();
-        }, 1200);
-      } else if (data.type === 'hello') {
+      if (data.type === 'hello') {
         renderQuickSlots();
         const filled = multi.lobbyPlayers.length;
-        const total = quickMatch.desiredSize;
-        setQuickStatus(
-          `${filled}/${total} joueurs dans le salon`,
-          `En attente de ${total - filled} joueur${total-filled>1?'s':''}...`
-        );
+        // Démarrage AUTO si on atteint 4 joueurs
+        if (filled === QUICK_MAX_PLAYERS && !multi.enabled) {
+          setQuickStatus(`✅ Salon plein ! La partie commence<span class="pulse">...</span>`, ``);
+          setTimeout(() => {
+            if (!quickMatch.cancelled) startMultiplayerGame();
+          }, 1200);
+        } else {
+          setQuickStatus(
+            `${filled}/${QUICK_MAX_PLAYERS} joueurs dans le salon`,
+            filled >= QUICK_MIN_PLAYERS
+              ? `Tu peux lancer la partie quand tu veux`
+              : `En attente d'au moins 1 autre joueur...`
+          );
+        }
       }
     });
 
@@ -5704,19 +5689,26 @@ function becomeQuickHost(idx) {
       multi.connections = multi.connections.filter(c => c !== conn);
       multi.lobbyPlayers = multi.lobbyPlayers.filter(p => p.peerId !== conn.peer);
       renderQuickSlots();
+      // Re-broadcast lobby aux autres
+      broadcastLobby();
       if (multi.enabled && state.phase !== 'gameEnd') {
         toast('Un joueur s\'est déconnecté', 'error');
       } else if (!multi.enabled) {
-        setQuickStatus(`En attente d'autres joueurs<span class="pulse">...</span>`,
-          `${multi.lobbyPlayers.length}/${quickMatch.desiredSize} joueurs`);
+        const filled = multi.lobbyPlayers.length;
+        setQuickStatus(
+          `${filled}/${QUICK_MAX_PLAYERS} joueurs dans le salon`,
+          filled >= QUICK_MIN_PLAYERS
+            ? `Tu peux lancer la partie quand tu veux`
+            : `En attente d'au moins 1 autre joueur...`
+        );
       }
     });
   });
 
   multi.peer.on('error', (err) => {
-    console.warn('[QuickMatch/Host] Erreur slot', idx, ':', err.type);
+    console.warn('[QuickMatch/Host] Erreur:', err.type);
     if (err.type === 'unavailable-id') {
-      // Collision : essayer le slot suivant
+      // Course concurrente : essayer le slot suivant
       try { multi.peer.destroy(); } catch(e) {}
       multi.peer = null;
       if (!quickMatch.cancelled) {
@@ -5728,24 +5720,20 @@ function becomeQuickHost(idx) {
 
 // ----- Listeners boutons UI -----
 document.getElementById('welcomeBtnQuick').addEventListener('click', ()=> {
-  // D'abord la vue de choix de taille
-  showWelcomeView('welcomeViewQuickSize');
-});
-
-document.getElementById('welcomeBackFromQuickSize').addEventListener('click', ()=> {
-  showWelcomeView('welcomeViewMultiChoice');
-});
-
-// Sélection de la taille → démarre la recherche
-document.querySelectorAll('.welcome-quick-size-btn').forEach(btn => {
-  btn.addEventListener('click', ()=> {
-    const size = parseInt(btn.dataset.size, 10);
-    startQuickMatch(size);
-  });
+  // Démarre directement la recherche, plus de choix de taille
+  startQuickMatch();
 });
 
 document.getElementById('welcomeBtnCancelQuick').addEventListener('click', ()=> {
   cancelQuickMatch();
+});
+
+// Bouton "Lancer la partie" pour l'hôte (visible avec ≥ 2 joueurs)
+document.getElementById('welcomeBtnQuickStart').addEventListener('click', ()=> {
+  if (!multi.isHost) return;
+  if (multi.lobbyPlayers.length < QUICK_MIN_PLAYERS) return;
+  setQuickStatus(`✅ La partie commence<span class="pulse">...</span>`, ``);
+  setTimeout(()=> startMultiplayerGame(), 600);
 });
 
 document.getElementById('welcomeBtnCreate').addEventListener('click', ()=> {
@@ -5823,7 +5811,7 @@ document.getElementById('welcomeStartMulti').addEventListener('click', ()=> {
 function showWelcomeView(viewId) {
   const views = ['welcomeViewMain', 'welcomeViewSolo', 'welcomeViewMultiChoice',
                  'welcomeViewHost', 'welcomeViewJoin', 'welcomeViewLobby',
-                 'welcomeViewQuickSize', 'welcomeViewQuick'];
+                 'welcomeViewQuick'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (el) el.style.display = (id === viewId) ? 'block' : 'none';
