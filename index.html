@@ -643,50 +643,63 @@
       font-weight: 600;
     }
 
-    /* TAPIS : layout vertical, hauteur naturelle */
+    /* TAPIS : layout HORIZONTAL côte à côte sur mobile (2 joueurs) */
     .mats-container {
-      flex-direction: column;
-      gap: 8px;
+      flex-direction: row;
+      gap: 6px;
       max-height: none;
       min-height: 0;
       margin-bottom: 4px;
       flex: none;
       width: 100%;
+      flex-wrap: wrap;
+      justify-content: center;
     }
-    .mats-container[data-count="2"] .mat-wrapper,
-    .mats-container[data-count="3"] .mat-wrapper,
-    .mats-container[data-count="4"] .mat-wrapper {
-      max-width: 100%;
-      flex: none;
-      width: 100%;
+    .mats-container[data-count="2"] .mat-wrapper {
+      flex: 1 1 calc(50% - 4px);
+      max-width: calc(50% - 4px);
+      min-width: 0;
     }
+    /* 3 ou 4 joueurs : grille 2×2 sur mobile */
     .mats-container[data-count="3"],
     .mats-container[data-count="4"] {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 6px;
       max-height: none;
     }
+    .mats-container[data-count="3"] .mat-wrapper,
+    .mats-container[data-count="4"] .mat-wrapper {
+      max-width: none;
+      flex: none;
+      min-width: 0;
+    }
     .dice-mat,
+    .mats-container[data-count="2"] .dice-mat,
     .mats-container[data-count="3"] .dice-mat,
     .mats-container[data-count="4"] .dice-mat {
-      min-height: 170px;
-      max-height: 200px;
+      min-height: 150px;
+      max-height: 180px;
     }
-    /* Le label centré au-dessus, plus haut pour ne pas chevaucher les dés */
+    /* Pseudo en haut, plus petit pour s'adapter aux tapis étroits */
     .mat-label {
-      font-size: 22px;
-      top: 14px;
+      font-size: 16px;
+      top: 10px;
       text-shadow: 0 2px 4px rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
       pointer-events: none;
       z-index: 5;
+      letter-spacing: 0.2px;
     }
     .mat-score {
-      font-size: 14px;
-      padding: 4px 10px;
+      font-size: 12px;
+      padding: 3px 8px;
+      top: 8px;
+      right: 8px;
     }
     /* Décale le canvas vers le bas pour que les dés ne mangent pas le pseudo */
     .dice-canvas {
-      padding-top: 36px;
+      padding-top: 28px;
       box-sizing: border-box;
     }
 
@@ -762,17 +775,22 @@
     .logo { font-size: 15px; }
     .logo-icon { width: 24px; height: 24px; font-size: 12px; }
     .round-info { font-size: 10px; padding: 2px 6px; }
-    .player-card { flex: 1 1 100%; }
+    .player-card { flex: 1 1 calc(50% - 3px); padding: 4px 6px 4px 4px; gap: 6px; }
+    .player-avatar { width: 28px; height: 28px; font-size: 11px; }
+    .player-name { font-size: 12px; }
+    .stat-pill { font-size: 11px; padding: 1px 4px; }
     .card-container { width: 230px; height: 165px; }
     .card-description { font-size: 12px; padding: 7px 12px; line-height: 1.35; }
     .dice-mat,
+    .mats-container[data-count="2"] .dice-mat,
     .mats-container[data-count="3"] .dice-mat,
     .mats-container[data-count="4"] .dice-mat {
-      min-height: 150px;
-      max-height: 170px;
+      min-height: 130px;
+      max-height: 150px;
     }
-    .mat-label { font-size: 19px; top: 11px; }
-    .dice-canvas { padding-top: 32px; }
+    .mat-label { font-size: 14px; top: 8px; }
+    .mat-score { font-size: 11px; padding: 2px 6px; }
+    .dice-canvas { padding-top: 24px; }
     .btn {
       font-size: 12px;
       padding: 9px 11px;
