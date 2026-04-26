@@ -553,85 +553,112 @@
     .btn-primary { font-size: 14px; padding: 8px 18px; }
   }
 
-  /* Mobile (≤640px) — réorganisation verticale, panneau joueurs en haut */
+  /* ============================================================
+     MOBILE (≤640px) — interface optimisée tactile
+  ============================================================ */
   @media (max-width: 640px) {
-    body { overflow-y: auto; overflow-x: hidden; }
-    html, body { height: auto; min-height: 100%; }
+    /* Body scrollable verticalement, plein écran avec dvh pour
+       respecter la barre de navigation des navigateurs mobiles */
+    html, body {
+      height: auto;
+      min-height: 100dvh;
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    body {
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
     .main {
       flex-direction: column;
-      padding: 6px;
-      min-height: 100vh;
+      padding: 4px;
+      min-height: 100dvh;
       height: auto;
+      gap: 4px;
+      /* Padding bottom : équivalent de la hauteur des controls + sécurité */
+      padding-bottom: 90px;
     }
+
+    /* TOPBAR compacte */
     .topbar {
       flex-wrap: wrap;
-      gap: 6px;
-      padding: 6px 10px;
+      gap: 4px;
+      padding: 6px 8px;
+      justify-content: center;
     }
-    .logo { font-size: 18px; letter-spacing: 1px; }
-    .logo-icon { width: 28px; height: 28px; font-size: 14px; }
+    .logo { font-size: 17px; letter-spacing: 1px; }
+    .logo-icon { width: 26px; height: 26px; font-size: 13px; }
     .round-info {
       font-size: 11px;
       padding: 3px 8px;
       letter-spacing: 0.5px;
     }
-    /* Panneau joueurs : passe en horizontal en haut */
+
+    /* PANNEAU JOUEURS : horizontal en haut, plus visible */
     .players-panel {
       position: relative;
       top: 0; right: 0; left: 0;
       width: 100%;
       flex-direction: row;
       gap: 6px;
-      margin-bottom: 6px;
+      margin: 4px 0;
       flex-wrap: wrap;
     }
     .player-card {
-      flex: 1 1 calc(50% - 4px);
+      flex: 1 1 calc(50% - 3px);
       min-width: 0;
-      padding: 5px 8px 5px 5px;
-      gap: 6px;
+      padding: 6px 10px 6px 6px;
+      gap: 8px;
     }
     .player-avatar {
-      width: 30px; height: 30px;
-      font-size: 11px;
+      width: 32px; height: 32px;
+      font-size: 12px;
       flex-shrink: 0;
     }
-    .player-name { font-size: 12px; }
-    .stat-pill { font-size: 11px; padding: 1px 4px; gap: 2px; }
-    .stat-icon { font-size: 11px; }
+    .player-name { font-size: 13px; font-weight: 700; }
+    .stat-pill { font-size: 12px; padding: 2px 6px; gap: 3px; }
+    .stat-icon { font-size: 12px; }
 
-    /* Aire de jeu : tout réduit */
+    /* AIRE DE JEU : naturelle, pas de flex:1 strict */
     .play-area {
       gap: 8px;
-      padding-top: 0;
+      padding-top: 2px;
       overflow: visible;
       height: auto;
       flex: none;
-    }
-    .card-container {
-      width: 240px;
-      height: 172px;
-    }
-    .card-description {
-      font-size: 12px;
-      line-height: 1.35;
-      padding: 8px 12px;
-      max-width: 95%;
+      width: 100%;
     }
 
-    /* Tapis : layout vertical (l'un en dessous de l'autre) sur mobile */
+    /* CARTE CONDITION : taille augmentée pour bien voir */
+    .card-container {
+      width: 270px;
+      height: 193px;
+    }
+    .card-description {
+      font-size: 13px;
+      line-height: 1.4;
+      padding: 9px 14px;
+      max-width: 95%;
+      font-weight: 600;
+    }
+
+    /* TAPIS : layout vertical, hauteur naturelle */
     .mats-container {
       flex-direction: column;
       gap: 8px;
       max-height: none;
       min-height: 0;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
+      flex: none;
+      width: 100%;
     }
     .mats-container[data-count="2"] .mat-wrapper,
     .mats-container[data-count="3"] .mat-wrapper,
     .mats-container[data-count="4"] .mat-wrapper {
       max-width: 100%;
       flex: none;
+      width: 100%;
     }
     .mats-container[data-count="3"],
     .mats-container[data-count="4"] {
@@ -642,66 +669,123 @@
     .dice-mat,
     .mats-container[data-count="3"] .dice-mat,
     .mats-container[data-count="4"] .dice-mat {
-      min-height: 140px;
-      max-height: 160px;
+      min-height: 170px;
+      max-height: 200px;
     }
+    /* Le label centré au-dessus, plus haut pour ne pas chevaucher les dés */
     .mat-label {
-      font-size: 18px;
-      top: 18px;
+      font-size: 22px;
+      top: 14px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
+      pointer-events: none;
+      z-index: 5;
     }
     .mat-score {
       font-size: 14px;
       padding: 4px 10px;
     }
+    /* Décale le canvas vers le bas pour que les dés ne mangent pas le pseudo */
+    .dice-canvas {
+      padding-top: 36px;
+      box-sizing: border-box;
+    }
 
-    /* Controls : compact et flex-wrap */
+    /* CONTROLS : sticky en bas, toujours accessible */
     .controls {
-      padding: 6px 10px;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      max-width: 100vw;
+      padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
       gap: 8px;
-      border-radius: 24px;
+      border-radius: 18px 18px 0 0;
       flex-wrap: wrap;
+      background: rgba(15, 8, 4, 0.95);
+      border: 1px solid rgba(255,140,40,0.4);
+      border-bottom: none;
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
+      z-index: 20;
+      backdrop-filter: blur(10px);
+      justify-content: space-around;
     }
     .control-section {
-      gap: 5px;
+      gap: 6px;
+      flex: 1 1 auto;
+      justify-content: center;
     }
     .control-section + .control-section {
-      padding-left: 8px;
+      padding-left: 6px;
+      border-left: none;
     }
     .control-label {
       font-size: 11px;
+      font-weight: 600;
     }
+    /* Boutons : minimum 44px pour le tactile */
     .btn {
-      font-size: 12px;
-      padding: 6px 10px;
-      min-width: 0;
+      font-size: 13px;
+      padding: 10px 14px;
+      min-height: 42px;
+      min-width: 50px;
+      border-radius: 10px;
+      font-weight: 700;
     }
     .btn-primary {
-      font-size: 13px;
-      padding: 7px 14px;
+      font-size: 14px;
+      padding: 11px 18px;
+      min-height: 46px;
+      min-width: 90px;
+    }
+    .btn-secondary {
+      min-width: 80px;
     }
 
-    /* Toasts plus petits */
+    /* TOASTS adaptés */
     .toast {
-      font-size: 12px;
-      padding: 8px 14px;
+      font-size: 13px;
+      padding: 10px 16px;
       max-width: 90vw;
+    }
+
+    /* CARTE INVALIDE (croix.png) : adapter taille */
+    .invalid-cross {
+      background-size: 75%;
     }
   }
 
-  /* Très petit mobile (≤380px) */
+  /* ============================================================
+     PETIT MOBILE (≤380px)
+  ============================================================ */
   @media (max-width: 380px) {
-    .logo { font-size: 16px; }
+    .logo { font-size: 15px; }
+    .logo-icon { width: 24px; height: 24px; font-size: 12px; }
+    .round-info { font-size: 10px; padding: 2px 6px; }
     .player-card { flex: 1 1 100%; }
-    .card-container { width: 200px; height: 144px; }
-    .card-description { font-size: 11px; padding: 6px 10px; }
+    .card-container { width: 230px; height: 165px; }
+    .card-description { font-size: 12px; padding: 7px 12px; line-height: 1.35; }
     .dice-mat,
     .mats-container[data-count="3"] .dice-mat,
     .mats-container[data-count="4"] .dice-mat {
-      min-height: 120px;
-      max-height: 140px;
+      min-height: 150px;
+      max-height: 170px;
     }
-    .mat-label { font-size: 16px; top: 14px; }
-    .btn { font-size: 11px; padding: 5px 8px; }
+    .mat-label { font-size: 19px; top: 11px; }
+    .dice-canvas { padding-top: 32px; }
+    .btn {
+      font-size: 12px;
+      padding: 9px 11px;
+      min-height: 40px;
+    }
+    .btn-primary {
+      font-size: 13px;
+      padding: 10px 14px;
+      min-height: 44px;
+    }
+    .main {
+      padding-bottom: 84px;
+    }
   }
 
   /* Désactiver les hover sur écrans tactiles (évite "stuck hover") */
@@ -5224,6 +5308,9 @@ function applyRemoteRoundReset(newRound) {
 function applyRemoteRoll(playerIdx, values, isReroll, rerollIndices) {
   const player = state.players[playerIdx];
   if (!player) return;
+
+  // Jouer le son du lancer (les invités entendent les dés des autres joueurs)
+  playSound();
 
   if (isReroll && rerollIndices && rerollIndices.length > 0) {
     // Relance partielle : on remplace seulement les valeurs sélectionnées
