@@ -2130,27 +2130,52 @@ function playSound() {
     soundPoolIdx = (soundPoolIdx + 1) % SOUND_POOL_SIZE;
     a.currentTime = 0;
     const p = a.play();
-    if (p && p.catch) p.catch(()=>{ /* autoplay bloqué avant interaction, on ignore */ });
+    if (p && p.catch) {
+      p.catch((err)=>{
+        // Autoplay bloqué : on retente l'unlock pour la prochaine fois
+        if (err && err.name === 'NotAllowedError') {
+          audioUnlocked = false;
+        }
+      });
+    }
   } catch(e) { /* silent */ }
 }
 
 // Navigateurs bloquent l'autoplay tant que l'user n'a pas interagi.
-// Au premier clic n'importe où, on "déverrouille" en jouant un son silencieux.
+// Au premier clic / touch / keypress n'importe où, on "déverrouille" en jouant un son silencieux.
 function unlockAudio() {
   if (audioUnlocked) return;
-  audioUnlocked = true;
+  // Test : essayer de jouer un son à volume 0
+  let unlockedSomething = false;
   for (const a of soundPool) {
-    const savedVol = a.volume;
-    a.volume = 0;
-    const p = a.play();
-    if (p && p.catch) p.catch(()=>{});
-    a.pause();
-    a.currentTime = 0;
-    a.volume = savedVol;
+    try {
+      const savedVol = a.volume;
+      a.volume = 0;
+      const p = a.play();
+      if (p && p.then) {
+        p.then(()=>{
+          a.pause();
+          a.currentTime = 0;
+          a.volume = savedVol;
+          unlockedSomething = true;
+        }).catch(()=>{
+          a.volume = savedVol;
+        });
+      } else {
+        a.pause();
+        a.currentTime = 0;
+        a.volume = savedVol;
+        unlockedSomething = true;
+      }
+    } catch(e) {}
   }
+  if (unlockedSomething) audioUnlocked = true;
 }
-document.addEventListener('click', unlockAudio, { once: true, capture: true });
-document.addEventListener('keydown', unlockAudio, { once: true, capture: true });
+// Pas { once: true } : on retente à chaque interaction tant que pas confirmé.
+// Capture pour intercepter avant tout handler qui aurait stopPropagation.
+['click', 'touchstart', 'touchend', 'keydown', 'pointerdown'].forEach(ev => {
+  document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
+});
 
 initSounds();
 
@@ -2278,11 +2303,22 @@ function attachHumanCanvasHandlers() {
   });
 }
 
+// Taille des dés adaptée à la taille du viewport.
+// - Desktop (> 640px) : 72px (taille standard)
+// - Mobile (≤ 640px)  : 48px (proportionné aux tapis plus petits)
+// - Petit mobile (≤ 380px) : 40px
+function getDieSize() {
+  const w = window.innerWidth || 1024;
+  if (w <= 380) return 40;
+  if (w <= 640) return 48;
+  return 72;
+}
+
 // --- 3D Die class with quaternion-like rotation ---
 class Die3D {
   constructor(targetValue, index, total) {
     this.value = targetValue;
-    this.size = 72;
+    this.size = getDieSize();
     // Start position - scattered from center top
     this.x = 0; this.y = 0;
     this.vx = 0; this.vy = 0;
@@ -3053,7 +3089,7 @@ function flyDiceToWinner(winnerIdx, onComplete) {
 class FlyingDie {
   constructor(value, startX, startY, targetX, targetY) {
     this.value = value;
-    this.size = 72;
+    this.size = getDieSize();
     this.startX = startX; this.startY = startY;
     this.x = startX; this.y = startY;
     this.targetX = targetX; this.targetY = targetY;
@@ -3210,8 +3246,10 @@ function layoutTargets(playerIdx, n) {
   const rect = canvases[playerIdx].getBoundingClientRect();
   const cx = rect.width / 2;
   const cy = rect.height / 2 + 10;
-  // Spacing adapté à la nouvelle taille des dés (72px) + un peu de marge
-  const spacing = Math.min(82, rect.width / (Math.min(n,4)+1.2));
+  // Spacing adapté à la taille des dés (72/48/40 selon le viewport)
+  const dieSize = getDieSize();
+  const minSpacing = dieSize + 10; // un peu de marge entre les dés
+  const spacing = Math.min(minSpacing, rect.width / (Math.min(n,4)+1.2));
   const cols = Math.min(n, 4);
   const rows = Math.ceil(n / cols);
   const targets = [];
@@ -3907,8 +3945,14 @@ function doFirstRoll() {
   state.phase = 'rolling';
   setWaitingMode();
 
-  // Son pour l'IA (l'humain l'a déjà joué sur le click du bouton)
-  if (!state.players[playerIdx].isHuman) playSound();
+  // Jouer le son du lancer dans plusieurs cas :
+  // - IA en solo (l'humain n'a pas cliqué le bouton)
+  // - Multi : hôte exécute pour un invité (pas son propre tour)
+  // (L'humain local qui lance lui-même a déjà joué le son via btnRoll listener)
+  const isLocalAction = !multi.enabled || playerIdx === multi.myPlayerIdx;
+  if (!state.players[playerIdx].isHuman || !isLocalAction) {
+    playSound();
+  }
 
   // Génération des valeurs (l'hôte est l'autorité)
   const values = Array.from({length: player.chosen}, ()=> 1 + Math.floor(Math.random()*6));
@@ -3938,7 +3982,11 @@ function doReroll() {
   state.phase = 'rolling';
   setWaitingMode();
 
-  if (!state.players[playerIdx].isHuman) playSound();
+  // Son : IA en solo, OU multi avec action distante reçue par l'hôte
+  const isLocalAction = !multi.enabled || playerIdx === multi.myPlayerIdx;
+  if (!state.players[playerIdx].isHuman || !isLocalAction) {
+    playSound();
+  }
 
   hideInvalidCross(playerIdx);
   hideMatScore(playerIdx);
@@ -5327,7 +5375,10 @@ function applyRemoteRoll(playerIdx, values, isReroll, rerollIndices) {
   const player = state.players[playerIdx];
   if (!player) return;
 
-  // Jouer le son du lancer (les invités entendent les dés des autres joueurs)
+  console.log('[Multi/Guest] Lancer reçu de joueur', playerIdx, ':', values);
+
+  // Tenter de débloquer l'audio (sans bruit) puis jouer le son
+  unlockAudio();
   playSound();
 
   if (isReroll && rerollIndices && rerollIndices.length > 0) {
