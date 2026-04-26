@@ -4292,6 +4292,11 @@ function endRound() {
   if (winner >= 0) {
     toast(`${players[winner].name} remporte ${pot} dés !`, 'success');
     setTimeout(()=> {
+      // En multi côté hôte : notifier les invités pour qu'ils déclenchent
+      // l'animation des dés volants en synchro
+      if (multi.enabled && multi.isHost) {
+        broadcastToGuests({ type: 'flyDice', winnerIdx: winner, pot });
+      }
       flyDiceToWinner(winner, ()=> {
         finalizeRoundEnd(winner, pot);
       });
@@ -4299,6 +4304,9 @@ function endRound() {
     }, 900);
   } else {
     toast('Égalité — les dés reviennent à leurs propriétaires', 'info');
+    if (multi.enabled && multi.isHost) {
+      broadcastToGuests({ type: 'flyDice', winnerIdx: -1, pot });
+    }
     setTimeout(()=> finalizeRoundEnd(-1, pot), 1400);
   }
 }
@@ -5106,6 +5114,12 @@ function handleGuestMessage(msg) {
       }
       break;
 
+    case 'flyDice':
+      // L'hôte signale l'animation des dés volants vers le gagnant
+      // → on la déclenche en local pour qu'elle soit synchronisée
+      applyRemoteFlyDice(msg.winnerIdx, msg.pot);
+      break;
+
     default:
       console.warn('[Multi/Guest] Message inconnu:', msg);
   }
@@ -5368,6 +5382,25 @@ function applyRemoteRoundReset(newRound) {
   setWaitingMode();
   renderStats();
   for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+}
+
+// Côté invité : déclenche l'animation des dés volants vers le gagnant
+// pour rester synchronisé avec l'hôte.
+function applyRemoteFlyDice(winnerIdx, pot) {
+  console.log('[Multi/Guest] FlyDice winner=', winnerIdx, 'pot=', pot);
+  if (typeof winnerIdx !== 'number' || winnerIdx < 0) {
+    // Pas de gagnant : pas d'animation, les dés restent en place
+    return;
+  }
+  // Lancer la même animation que l'hôte (l'invité a déjà tous les dés
+  // au repos sur les tapis grâce aux applyRemoteRoll précédents).
+  // onComplete est null côté invité : c'est l'hôte qui orchestre la suite
+  // (finalizeRoundEnd → broadcastSync → l'invité recevra le nouvel état).
+  flyDiceToWinner(winnerIdx, ()=> {
+    // Optionnel : on pourrait nettoyer ici, mais l'hôte va broadcast le sync
+    // de toute façon avec les dés ajustés.
+  });
+  requestAnimationFrame(animateFlyScene);
 }
 
 // Côté invité : applique un lancer de dés généré par l'hôte
