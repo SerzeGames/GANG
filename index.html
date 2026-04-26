@@ -1715,10 +1715,23 @@
 // ------------ Game Configuration ------------
 const CONFIG = {
   maxRounds: 12,
-  startDice: 8,
-  startTokens: 3,
-  maxDicePerRoll: 8
+  // Nombre de dés au départ selon le nombre de joueurs :
+  //   - 2 ou 3 joueurs : 48 dés chacun
+  //   - 4 joueurs      : 36 dés chacun
+  startDice2to3: 48,
+  startDice4: 36,
+  startTokens: 0,            // Plus de jetons : les règles officielles n'en utilisent pas
+  maxDicePerRoll: 8,
+  // Dés bonus du "pot" ajoutés en jeu sur les dernières manches :
+  //   manche 10 → +3, manche 11 → +6, manche 12 → +9
+  bonusDice: { 10: 3, 11: 6, 12: 9 }
 };
+
+// Renvoie le nombre de dés de départ selon le nombre de joueurs
+function getStartDiceForPlayerCount(n) {
+  if (n >= 4) return CONFIG.startDice4;
+  return CONFIG.startDice2to3;
+}
 
 // ------------ Cards Definition ------------
 // Face 6 = "boss" : valeur nulle (compte 0 pour la somme, ignorée pour les règles)
@@ -1892,11 +1905,14 @@ function hasConsecutive(dice, k) {
 const MAX_ROLLS = 3; // 1 lancer initial + 2 relances
 
 // Helper pour créer un joueur dans l'état initial
-function makePlayer(name, isHuman) {
+function makePlayer(name, isHuman, startDice) {
+  // startDice : valeur par défaut = 48 (taille standard 2-3 joueurs).
+  // L'appelant doit normalement la passer explicitement via getStartDiceForPlayerCount(n).
+  const d = (typeof startDice === 'number') ? startDice : CONFIG.startDice2to3;
   return {
     name,
     isHuman: !!isHuman,
-    dice: CONFIG.startDice,
+    dice: d,
     tokens: CONFIG.startTokens,
     chosen: 1,
     score: null,
@@ -1982,11 +1998,7 @@ function buildPlayerUI() {
       dicePill.className = 'stat-pill dice-pill';
       dicePill.innerHTML = `<span class="stat-icon">🎲</span><span id="diceP${idx}">${p.dice}</span>`;
       statsRow.appendChild(dicePill);
-
-      const tokenPill = document.createElement('span');
-      tokenPill.className = 'stat-pill token-pill';
-      tokenPill.innerHTML = `<span class="stat-icon">🪙</span><span id="tokensP${idx}">${p.tokens}</span>`;
-      statsRow.appendChild(tokenPill);
+      // Plus de pill jetons : règles officielles n'utilisent pas de jetons
     }
 
     const scorePill = document.createElement('span');
@@ -3560,7 +3572,7 @@ function renderStats() {
     const p = state.players[i];
     const idx = i + 1;
     const isCurrent = state.currentPlayer === i && state.phase !== 'gameEnd';
-    const isEliminated = p.dice === 0 && p.tokens === 0;
+    const isEliminated = p.dice === 0;
 
     // Mise à jour des éléments pills (peuvent être absents pour IA)
     const diceEl = document.getElementById(`diceP${idx}`);
@@ -3729,7 +3741,7 @@ function startNewRound() {
   const candidates = [];
   for (let i = 0; i < n; i++) {
     const p = state.players[i];
-    if (p.dice === 0 && p.tokens === 0) continue; // éliminé
+    if (p.dice === 0) continue; // éliminé
     if (p.dice < minDice) {
       minDice = p.dice;
       candidates.length = 0;
@@ -4246,6 +4258,15 @@ function endRound() {
     if (p.rolled) pot += p.chosen;
   }
 
+  // Bonus de dés sur les dernières manches (selon règles officielles) :
+  //   manche 10 → +3 dés, manche 11 → +6, manche 12 → +9
+  // Ces dés s'ajoutent au pot et reviennent au gagnant.
+  const bonus = CONFIG.bonusDice[state.round] || 0;
+  if (bonus > 0) {
+    pot += bonus;
+    toast(`+${bonus} dés bonus dans le pot !`, 'info');
+  }
+
   // Détermination du gagnant parmi N joueurs
   // - Joueurs valides ayant joué : on prend celui avec le score max
   // - En cas d'égalité de score : winner = -1 (égalité, dés rendus)
@@ -4315,29 +4336,31 @@ function finalizeRoundEnd(winner, pot) {
   const players = state.players;
   const n = players.length;
 
-  // Retirer les dés joués par chaque joueur
+  // Retirer les dés joués par chaque joueur (les dés misés)
   for (let i = 0; i < n; i++) {
     if (players[i].rolled) players[i].dice -= players[i].chosen;
   }
 
   if (winner >= 0) {
+    // Le gagnant remporte tout le pot (dés misés + bonus s'il y en a)
     players[winner].dice += pot;
     addHistory(winner, `Gagne ${pot} dés !`, 'win');
   } else {
-    // Égalité : tous les dés reviennent à leurs propriétaires
+    // Égalité : seuls les dés MISÉS par chaque joueur lui sont rendus.
+    // Les dés bonus du pot ne sont rendus à personne (ils étaient au "pot",
+    // pas à un joueur).
     for (let i = 0; i < n; i++) {
       if (players[i].rolled) players[i].dice += players[i].chosen;
     }
   }
 
-  // Check elimination + utilisation de jetons
+  // Élimination : un joueur à court de dés a perdu la partie.
+  // Plus de "jetons de secours" : règles officielles strictes.
   for (let i = 0; i < n; i++) {
     const p = players[i];
-    if (p.dice === 0 && p.tokens > 0) {
-      p.tokens--;
-      p.dice = 2;
-      addHistory(i, `Utilise un jeton → +2 dés`, 'info');
-      toast(`${p.name} utilise un jeton (+2 dés)`, 'info');
+    if (p.dice <= 0) {
+      p.dice = 0;
+      addHistory(i, `Éliminé : plus de dés`, 'invalid');
     }
   }
 
@@ -4349,8 +4372,10 @@ function finalizeRoundEnd(winner, pot) {
   DOM.btnNext.style.display = 'inline-block';
   DOM.btnNext.disabled = false;
 
-  // Check game end : tous les joueurs sauf un sont éliminés ?
-  const aliveCount = players.filter(p => p.dice > 0 || p.tokens > 0).length;
+  // Fin de partie si :
+  //   - on a atteint la dernière manche (12), OU
+  //   - il ne reste plus qu'un joueur en vie (les autres ont 0 dés)
+  const aliveCount = players.filter(p => p.dice > 0).length;
   if (state.round >= CONFIG.maxRounds || aliveCount <= 1) {
     setTimeout(()=> endGame(), 1200);
     return;
@@ -4389,23 +4414,26 @@ function goToNextRound() {
 function endGame() {
   state.phase = 'gameEnd';
   const players = state.players;
-  // Calcul du score final : 1 jeton = 3 dés (selon les règles officielles)
+  // Score final = nombre de dés (les jetons ne sont plus utilisés)
   const scored = players.map((p, i) => ({
     name: p.name,
     dice: p.dice,
-    tokens: p.tokens,
-    total: p.dice + p.tokens * 3,
+    total: p.dice,
     idx: i
   }));
-  // Tri descendant par total
+  // Tri descendant par dés
   scored.sort((a, b) => b.total - a.total);
 
-  // Détermine le(s) gagnant(s)
-  const top = scored[0].total;
-  const winners = scored.filter(s => s.total === top);
+  // Détermine le(s) gagnant(s) - un joueur à 0 dé ne peut pas gagner
+  const topScore = scored[0].total;
+  const winners = (topScore > 0)
+    ? scored.filter(s => s.total === topScore)
+    : [];
 
   let winnerText;
-  if (winners.length > 1) {
+  if (winners.length === 0) {
+    winnerText = `Tous les joueurs ont été éliminés`;
+  } else if (winners.length > 1) {
     winnerText = `🤝 ÉGALITÉ : ${winners.map(w => w.name).join(' & ')}`;
   } else {
     winnerText = `🏆 ${winners[0].name} GAGNE !`;
@@ -4413,8 +4441,14 @@ function endGame() {
 
   // Construire la liste des résultats
   const list = scored.map((s, rank) => {
-    const medal = rank === 0 ? '🥇' : (rank === 1 ? '🥈' : (rank === 2 ? '🥉' : '🎲'));
-    return `${medal} <strong>${s.name}</strong> — ${s.dice} dés + ${s.tokens} jetons = <strong>${s.total} pts</strong>`;
+    let medal;
+    if (s.dice === 0) medal = '💀';
+    else if (rank === 0) medal = '🥇';
+    else if (rank === 1) medal = '🥈';
+    else if (rank === 2) medal = '🥉';
+    else medal = '🎲';
+    const status = s.dice === 0 ? '<em>éliminé</em>' : `<strong>${s.dice} dés</strong>`;
+    return `${medal} <strong>${s.name}</strong> — ${status}`;
   }).join('<br>');
 
   DOM.modalTitle.textContent = 'FIN DE PARTIE';
@@ -4540,9 +4574,11 @@ DOM.btnRestart.addEventListener('click', ()=> {
 function resetGame() {
   state.round = 1;
   state.currentPlayer = 0;
+  // Nombre de dés de départ selon le nombre de joueurs actuels
+  const startDice = getStartDiceForPlayerCount(state.players.length);
   // Reset stats des joueurs existants (le nombre/type ne change pas)
   state.players.forEach(p=>{
-    p.dice = CONFIG.startDice;
+    p.dice = startDice;
     p.tokens = CONFIG.startTokens;
     p.chosen = 1;
     p.score = null;
@@ -4687,14 +4723,18 @@ welcomePseudo.addEventListener('change', ()=> {
  * supporter le bon nombre de joueurs (humain + 1/2/3 IA).
  */
 function startGameWithConfig() {
+  // Calculer le nombre de joueurs total (humain + IA) puis les dés de départ
+  const totalPlayers = 1 + gameConfig.aiCount;
+  const startDice = getStartDiceForPlayerCount(totalPlayers);
+
   // 1) Reconstruire state.players avec le bon nombre
   const players = [];
   // Joueur humain en premier
-  players.push(makePlayer(gameConfig.humanName || 'Joueur', true));
+  players.push(makePlayer(gameConfig.humanName || 'Joueur', true, startDice));
   // Puis les IA, avec leurs noms aléatoires
   for (let i = 0; i < gameConfig.aiCount; i++) {
     const name = (gameConfig.aiNames[i] || `IA ${i+1}`) + ' (IA)';
-    players.push(makePlayer(name, false));
+    players.push(makePlayer(name, false, startDice));
   }
   state.players = players;
 
@@ -5178,10 +5218,12 @@ function startMultiplayerGame() {
 
   multi.enabled = true;
 
+  // Nombre de dés de départ selon la taille du salon
+  const startDice = getStartDiceForPlayerCount(multi.lobbyPlayers.length);
+
   // Construire la liste des joueurs (tous humains pour le multi)
   const players = multi.lobbyPlayers.map((p, i) => {
-    const isMe = p.peerId === multi.myPeerId;
-    return makePlayer(p.pseudo, true);
+    return makePlayer(p.pseudo, true, startDice);
   });
   state.players = players;
   multi.myPlayerIdx = multi.lobbyPlayers.findIndex(p => p.peerId === multi.myPeerId);
