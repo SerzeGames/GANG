@@ -226,6 +226,45 @@
     /* Size/position set via JS */
   }
 
+  /* Affichage des dés bonus (manches 10-12) : flottant à droite de la carte */
+  .bonus-dice-display {
+    position: absolute;
+    top: 50%;
+    right: -90px;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: rgba(20, 10, 5, 0.85);
+    border: 2px solid rgba(255, 200, 80, 0.6);
+    border-radius: 8px;
+    padding: 8px 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 12px rgba(255,180,60,0.3);
+    z-index: 4;
+    animation: bonusDicePulse 2s ease-in-out infinite;
+  }
+  @keyframes bonusDicePulse {
+    0%, 100% { box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 12px rgba(255,180,60,0.3); }
+    50%      { box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 18px rgba(255,180,60,0.6); }
+  }
+  .bonus-dice-icon {
+    width: 36px;
+    height: 36px;
+    background: url('images/boss.png') center center / contain no-repeat;
+    /* Si boss.png n'existe pas, fallback par la même image que les dés */
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+  }
+  .bonus-dice-count {
+    color: #ffcc55;
+    font-family: 'Impact', 'Arial Black', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    line-height: 1;
+  }
+
   .card-description {
     background: rgba(245,230,210,0.95);
     color: #2a1505;
@@ -634,6 +673,24 @@
     .card-container {
       width: 270px;
       height: 193px;
+    }
+    /* Bonus dice display sur mobile : dans le coin haut-droit, plus petit */
+    .bonus-dice-display {
+      right: -8px;
+      top: -8px;
+      transform: none;
+      flex-direction: row;
+      gap: 5px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      align-items: center;
+    }
+    .bonus-dice-icon {
+      width: 22px;
+      height: 22px;
+    }
+    .bonus-dice-count {
+      font-size: 12px;
     }
     .card-description {
       font-size: 13px;
@@ -1667,6 +1724,11 @@
     <div class="card-container">
       <div class="card" id="card">
         <div class="card-face card-front" id="cardFront"></div>
+      </div>
+      <!-- Affichage des dés bonus (manches 10/11/12) - flottant à droite -->
+      <div class="bonus-dice-display" id="bonusDiceDisplay" style="display:none;">
+        <div class="bonus-dice-icon"></div>
+        <div class="bonus-dice-count" id="bonusDiceCount">+0</div>
       </div>
     </div>
     <div class="card-description" id="cardDesc">
@@ -3612,6 +3674,20 @@ function hideMatScore(playerIdx) {
   }
 }
 
+// Affiche/masque les dés bonus du pot pour les manches 10/11/12
+function updateBonusDiceDisplay() {
+  const display = document.getElementById('bonusDiceDisplay');
+  const countEl = document.getElementById('bonusDiceCount');
+  if (!display || !countEl) return;
+  const bonus = CONFIG.bonusDice[state.round] || 0;
+  if (bonus > 0) {
+    countEl.textContent = `+${bonus}`;
+    display.style.display = 'flex';
+  } else {
+    display.style.display = 'none';
+  }
+}
+
 function renderStats() {
   const n = getPlayerCount();
   for (let i = 0; i < n; i++) {
@@ -3685,8 +3761,14 @@ function setRerollMode(enabled, rollsLeft) {
 
 function updateRerollButtonLabel() {
   // Adapter le label du bouton relancer selon le nombre de dés sélectionnés
-  if (state.currentPlayer !== 0) return;
-  const scene = scenes[0];
+  // par le JOUEUR LOCAL (humain de cette fenêtre).
+  // - En solo : myIdx = 0 (l'humain)
+  // - En multi : myIdx = multi.myPlayerIdx (peut être 0, 1, 2 ou 3)
+  const myIdx = getMyPlayerIdx();
+  // Le label ne change que si c'est mon tour
+  if (state.currentPlayer !== myIdx) return;
+  const scene = scenes[myIdx];
+  if (!scene) return;
   const selectedCount = scene.dice.filter(d => d.selectedForReroll && d.state === 'rested').length;
   if (selectedCount === 0) {
     DOM.btnRoll.textContent = '🔄 RELANCER TOUT';
@@ -3732,6 +3814,8 @@ function startNewRound() {
   for (const scene of scenes) {
     for (const d of scene.dice) d.selectedForReroll = false;
   }
+  // Mettre à jour l'affichage des dés bonus selon la manche
+  updateBonusDiceDisplay();
 
   // Pick a card : seul l'hôte (ou le solo) tire une carte. L'invité attend le message.
   let card;
@@ -4459,6 +4543,17 @@ function goToNextRound() {
 
 function endGame() {
   state.phase = 'gameEnd';
+
+  // En multi côté hôte : broadcaster un sync final (avec les dés finaux)
+  // PUIS un message gameEnd pour que les invités affichent le même écran
+  if (multi.enabled && multi.isHost) {
+    broadcastSync();
+    // Petit délai pour que le sync arrive avant le gameEnd
+    setTimeout(()=> {
+      broadcastToGuests({ type: 'gameEnd' });
+    }, 50);
+  }
+
   const players = state.players;
   // Score final = nombre de dés (les jetons ne sont plus utilisés)
   const scored = players.map((p, i) => ({
@@ -5206,6 +5301,12 @@ function handleGuestMessage(msg) {
       applyRemoteFlyDice(msg.winnerIdx, msg.pot);
       break;
 
+    case 'gameEnd':
+      // L'hôte signale la fin de la partie : on affiche le même écran
+      // localement (state.players a déjà été synchronisé au préalable).
+      endGame();
+      break;
+
     default:
       console.warn('[Multi/Guest] Message inconnu:', msg);
   }
@@ -5384,6 +5485,9 @@ function applyRemoteSync(syncState) {
 
   renderStats();
   for (let i = 0; i < state.players.length; i++) updateMatLabel(i);
+
+  // Mettre à jour l'affichage des dés bonus selon la manche
+  updateBonusDiceDisplay();
 
   // Mettre à jour les boutons d'action selon la phase et qui doit jouer.
   // L'invité a besoin de savoir si c'est SON tour pour activer +/-/Lancer/Valider.
