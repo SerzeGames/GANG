@@ -192,6 +192,12 @@
     filter: drop-shadow(0 12px 24px rgba(0,0,0,0.65));
     overflow: hidden;
   }
+  /* Wrapper qui contient la carte ET le badge bonus, pour que le badge
+     puisse se positionner en dehors du card-container (qui a overflow:hidden) */
+  .card-and-bonus-wrapper {
+    position: relative;
+    display: inline-block;
+  }
   .card {
     width: 100%; height: 100%;
     position: relative;
@@ -1721,9 +1727,12 @@
 
   <!-- Aire de jeu pleine largeur -->
   <div class="play-area">
-    <div class="card-container">
-      <div class="card" id="card">
-        <div class="card-face card-front" id="cardFront"></div>
+    <!-- Wrapper card + bonus pour positionnement relatif -->
+    <div class="card-and-bonus-wrapper">
+      <div class="card-container">
+        <div class="card" id="card">
+          <div class="card-face card-front" id="cardFront"></div>
+        </div>
       </div>
       <!-- Affichage des dés bonus (manches 10/11/12) - flottant à droite -->
       <div class="bonus-dice-display" id="bonusDiceDisplay" style="display:none;">
@@ -1999,8 +2008,9 @@ const state = {
   phase: 'preRound', // preRound, choosing, rolling, rerolling, revealing, roundEnd, gameEnd
   diceInPot: 0,
   cardImage: null,
-  recentCardIds: [],         // ids des dernières cartes tirées (pour éviter répétitions exactes)
-  recentCategories: []       // catégories récentes (pour varier les types)
+  recentCardIds: [],         // ids des dernières cartes tirées (pour la catégorisation)
+  recentCategories: [],      // catégories récentes (pour varier les types)
+  cardDeck: []               // deck mélangé restant (chaque carte ne tombe qu'une fois par partie)
 };
 
 // Nombre actuel de joueurs (sera mis à jour selon la config du menu)
@@ -2130,53 +2140,40 @@ function categorizeCard(card) {
  * - évite aussi les 2-3 catégories les plus récentes pour favoriser la variété
  * - reste pondéré aléatoirement parmi les choix restants
  */
+// Mélange un tableau (Fisher-Yates) - retourne un nouveau tableau
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Construit un nouveau deck mélangé de toutes les cartes disponibles.
+// Utilisé en début de partie pour garantir qu'aucune carte ne se répète
+// pendant les 12 manches (il y a 18 cartes au total).
+function buildShuffledDeck() {
+  return shuffleArray(CARDS).map(c => c.id);
+}
+
 function pickNextCard() {
-  const allCards = CARDS;
-  const recentIds = state.recentCardIds || [];
-  const recentCats = state.recentCategories || [];
-
-  // 1. Exclure les cartes récemment tirées (les 2 dernières)
-  const lastIdsToAvoid = new Set(recentIds.slice(-2));
-
-  // 2. Catégories à éviter : les 2 dernières
-  const lastCatsToAvoid = new Set(recentCats.slice(-2));
-  // Catégories à fortement éviter : la toute dernière
-  const lastCat = recentCats[recentCats.length - 1];
-
-  // Filtrage progressif (du plus strict au plus permissif)
-  let pool;
-
-  // Niveau 1 : pas la même carte récente ET pas la même catégorie récente (2 dernières)
-  pool = allCards.filter(c =>
-    !lastIdsToAvoid.has(c.id) &&
-    !lastCatsToAvoid.has(categorizeCard(c))
-  );
-
-  // Niveau 2 (fallback) : juste éviter la dernière catégorie
-  if (pool.length === 0) {
-    pool = allCards.filter(c =>
-      !lastIdsToAvoid.has(c.id) &&
-      categorizeCard(c) !== lastCat
-    );
+  // Si le deck est vide ou non initialisé : en construire un nouveau mélangé
+  if (!state.cardDeck || state.cardDeck.length === 0) {
+    state.cardDeck = buildShuffledDeck();
   }
-
-  // Niveau 3 : juste éviter la dernière carte
-  if (pool.length === 0) {
-    pool = allCards.filter(c => !lastIdsToAvoid.has(c.id));
+  // Piocher la carte au sommet (consommée pour cette partie)
+  const cardId = state.cardDeck.shift();
+  const card = CARDS.find(c => c.id === cardId);
+  if (!card) {
+    // Sécurité : si jamais l'ID est invalide, on retombe sur une carte aléatoire
+    return CARDS[Math.floor(Math.random() * CARDS.length)];
   }
-
-  // Filet de sécurité (ne devrait jamais arriver)
-  if (pool.length === 0) pool = allCards;
-
-  // Tirage aléatoire dans le pool valide
-  const card = pool[Math.floor(Math.random() * pool.length)];
-
-  // Mémoriser pour les prochains tirages (garder les 3 derniers)
+  // Mettre à jour l'historique récent (utile pour la catégorisation/affichage)
   state.recentCardIds.push(card.id);
   if (state.recentCardIds.length > 3) state.recentCardIds.shift();
   state.recentCategories.push(categorizeCard(card));
   if (state.recentCategories.length > 3) state.recentCategories.shift();
-
   return card;
 }
 
@@ -2331,23 +2328,40 @@ function attachHumanCanvasHandlers() {
   const canvas = canvases[myIdx];
   if (!canvas) return;
 
-  canvas.addEventListener('click', (e)=>{
+  // Handler unifié click/tap : toggle la sélection du dé tapé
+  const handleTap = (clientX, clientY) => {
     if (!canSelectDice()) return;
-    const pos = getCanvasMousePos(canvas, e);
+    const rect = canvas.getBoundingClientRect();
+    const pos = { x: clientX - rect.left, y: clientY - rect.top };
     const scene = scenes[myIdx];
     if (!scene) return;
-    // Chercher le dé cliqué (topmost d'abord = plus grand y)
     const sorted = [...scene.dice].filter(d => d.state === 'rested')
                                    .sort((a,b)=> b.y - a.y);
     for (const d of sorted) {
       if (d.containsPoint(pos.x, pos.y)) {
         d.selectedForReroll = !d.selectedForReroll;
+        console.log('[Dice click] Toggled die at index', scene.dice.indexOf(d),
+                    'selected=', d.selectedForReroll);
         playSound();
         updateRerollButtonLabel();
         return;
       }
     }
+  };
+
+  canvas.addEventListener('click', (e)=>{
+    handleTap(e.clientX, e.clientY);
   });
+
+  // Handler tactile explicite (mobile) — empêche le clic synthétique
+  // d'être manqué sur certains navigateurs Samsung/iOS
+  canvas.addEventListener('touchend', (e)=>{
+    if (e.changedTouches && e.changedTouches.length > 0) {
+      e.preventDefault(); // évite le double-trigger click
+      const t = e.changedTouches[0];
+      handleTap(t.clientX, t.clientY);
+    }
+  }, { passive: false });
 
   canvas.addEventListener('mousemove', (e)=>{
     const scene = scenes[myIdx];
@@ -3553,6 +3567,37 @@ bossImg.onload = () => { bossImgLoaded = true; console.log('[OK] boss.png loaded
 bossImg.onerror = (e) => { console.error('[ERREUR] boss.png ne peut pas être chargé.', e); };
 bossImg.src = 'images/boss.png';
 
+// Affiche une carte avec ou sans animation slide-out/slide-in.
+// Utilisé par startNewRound (côté hôte/solo) ET applyRemoteCard (côté invité)
+// pour que l'animation se joue dans toutes les fenêtres en multi.
+function showCardWithAnimation(card, skipAnimation) {
+  if (!card) return;
+  if (skipAnimation) {
+    setCardFace(card);
+    if (DOM.cardDesc) DOM.cardDesc.textContent = card.desc;
+    toast(`Carte: ${card.name}`, 'info');
+    return;
+  }
+  // Animation slide : sort à gauche, entre à droite
+  DOM.cardDesc.textContent = "";
+  DOM.card.classList.remove('sliding-in', 'sliding-out');
+  void DOM.card.offsetWidth; // reflow
+  DOM.card.classList.add('sliding-out');
+
+  setTimeout(()=>{
+    setCardFace(card);
+    DOM.card.classList.remove('sliding-out');
+    void DOM.card.offsetWidth;
+    DOM.card.classList.add('sliding-in');
+  }, 350);
+
+  setTimeout(()=>{
+    DOM.cardDesc.textContent = card.desc;
+    toast(`Carte: ${card.name}`, 'info');
+    DOM.card.classList.remove('sliding-in');
+  }, 800);
+}
+
 function setCardFace(card) {
   // On utilise des pourcentages pour que la carte s'adapte à la taille du
   // conteneur (différente sur mobile, tablet, desktop).
@@ -3836,33 +3881,7 @@ function startNewRound() {
 
   // Animation de la carte : slide pour les manches > 1, affichage direct pour la manche 1
   const isFirstRound = state.round === 1;
-
-  if (isFirstRound) {
-    // Affichage direct sans animation
-    setCardFace(card);
-    DOM.cardDesc.textContent = card.desc;
-    toast(`Carte: ${card.name}`, 'info');
-  } else {
-    // Animation slide : sort à gauche, entre à droite
-    DOM.cardDesc.textContent = "";
-    DOM.card.classList.remove('sliding-in', 'sliding-out');
-    void DOM.card.offsetWidth; // reflow
-    DOM.card.classList.add('sliding-out');
-
-    setTimeout(()=>{
-      // À la moitié de l'anim : changer de carte
-      setCardFace(card);
-      DOM.card.classList.remove('sliding-out');
-      void DOM.card.offsetWidth;
-      DOM.card.classList.add('sliding-in');
-    }, 350);
-
-    setTimeout(()=>{
-      DOM.cardDesc.textContent = card.desc;
-      toast(`Carte: ${card.name}`, 'info');
-      DOM.card.classList.remove('sliding-in');
-    }, 800);
-  }
+  showCardWithAnimation(card, isFirstRound);
 
   // Détermination du premier joueur : celui avec le moins de dés (parmi vivants)
   // En cas d'égalité, aléatoire.
@@ -4732,6 +4751,7 @@ function resetGame() {
   state.diceInPot = 0;
   state.recentCardIds = [];
   state.recentCategories = [];
+  state.cardDeck = []; // sera remélangé au prochain pickNextCard
   // Reconstruire l'UI au cas où (sécurité, identique au startGameWithConfig)
   buildPlayerUI();
   rebuildCanvases();
@@ -4886,6 +4906,7 @@ function startGameWithConfig() {
   state.diceInPot = 0;
   state.recentCardIds = [];
   state.recentCategories = [];
+  state.cardDeck = []; // sera remélangé au prochain pickNextCard
   state.phase = 'preRound';
 
   // 3) Reconstruire DOM, canvases et scenes
@@ -5382,6 +5403,7 @@ function startMultiplayerGame() {
   state.diceInPot = 0;
   state.recentCardIds = [];
   state.recentCategories = [];
+  state.cardDeck = []; // sera remélangé au prochain pickNextCard
   state.phase = 'preRound';
 
   // Reconstruire UI
@@ -5541,9 +5563,9 @@ function applyRemoteCard(cardOrId) {
     return;
   }
   state.currentCard = card;
-  setCardFace(card);
-  if (DOM.cardDesc) DOM.cardDesc.textContent = card.desc;
-  toast(`Carte: ${card.name}`, 'info');
+  // Animation slide pour les manches > 1, affichage direct pour la manche 1
+  const isFirstRound = state.round === 1;
+  showCardWithAnimation(card, isFirstRound);
 }
 
 // Côté invité : l'hôte a démarré une nouvelle manche : nettoyer les tapis
