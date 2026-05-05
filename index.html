@@ -2328,8 +2328,12 @@ function attachHumanCanvasHandlers() {
   const canvas = canvases[myIdx];
   if (!canvas) return;
 
+  // Flag pour éviter le double-déclenchement touch + click synthétique
+  // (sur mobile, après un touchend, le navigateur génère un 'click' fantôme)
+  let lastTouchTime = 0;
+
   // Handler unifié click/tap : toggle la sélection du dé tapé
-  const handleTap = (clientX, clientY) => {
+  const handleTap = (clientX, clientY, source) => {
     if (!canSelectDice()) return;
     const rect = canvas.getBoundingClientRect();
     const pos = { x: clientX - rect.left, y: clientY - rect.top };
@@ -2340,8 +2344,8 @@ function attachHumanCanvasHandlers() {
     for (const d of sorted) {
       if (d.containsPoint(pos.x, pos.y)) {
         d.selectedForReroll = !d.selectedForReroll;
-        console.log('[Dice click] Toggled die at index', scene.dice.indexOf(d),
-                    'selected=', d.selectedForReroll);
+        console.log('[Dice click via', source, '] Toggled die at index',
+                    scene.dice.indexOf(d), 'selected=', d.selectedForReroll);
         playSound();
         updateRerollButtonLabel();
         return;
@@ -2350,16 +2354,22 @@ function attachHumanCanvasHandlers() {
   };
 
   canvas.addEventListener('click', (e)=>{
-    handleTap(e.clientX, e.clientY);
+    // Si un touchend a eu lieu il y a moins de 500ms, on IGNORE ce click
+    // car c'est le click "fantôme" synthétisé par le navigateur après le tap
+    if (Date.now() - lastTouchTime < 500) {
+      e.preventDefault();
+      return;
+    }
+    handleTap(e.clientX, e.clientY, 'click');
   });
 
-  // Handler tactile explicite (mobile) — empêche le clic synthétique
-  // d'être manqué sur certains navigateurs Samsung/iOS
+  // Handler tactile explicite (mobile)
   canvas.addEventListener('touchend', (e)=>{
     if (e.changedTouches && e.changedTouches.length > 0) {
-      e.preventDefault(); // évite le double-trigger click
+      e.preventDefault();
+      lastTouchTime = Date.now();
       const t = e.changedTouches[0];
-      handleTap(t.clientX, t.clientY);
+      handleTap(t.clientX, t.clientY, 'touch');
     }
   }, { passive: false });
 
@@ -3340,43 +3350,37 @@ function layoutTargets(playerIdx, n) {
   const cy = rect.height / 2 + 8;
   const dieSize = getDieSize();
 
-  // Espacement minimum souhaité entre les CENTRES de 2 dés voisins :
-  // taille du dé + une petite marge visuelle.
-  const minSpacing = dieSize + 8;
+  // Espacement minimum entre les CENTRES de 2 dés voisins :
+  // taille du dé + petite marge (resserré pour un look plus compact).
+  const minSpacing = dieSize + 2;
 
-  // Marge intérieure du tapis (le canvas a un padding-top sur mobile aussi)
-  const padX = dieSize * 0.55;
-  const padY = dieSize * 0.55;
+  // Marge intérieure du tapis
+  const padX = dieSize * 0.5;
+  const padY = dieSize * 0.5;
 
   // Combien de colonnes peut-on tenir avec ce minSpacing ?
-  // largeur dispo = rect.width - 2*padX, on doit y caser (cols-1)*minSpacing + dieSize
   const availW = Math.max(0, rect.width - 2 * padX);
   let maxColsByWidth = Math.floor((availW - dieSize) / minSpacing) + 1;
   if (maxColsByWidth < 1) maxColsByWidth = 1;
-  // Plafond : on ne fait jamais plus de 4 colonnes même si la place existe
-  // (pour rester lisible) ; et jamais plus que n
   const cols = Math.max(1, Math.min(n, 4, maxColsByWidth));
   const rows = Math.ceil(n / cols);
 
-  // Spacing X et Y : si on a peu de dés sur la largeur, on les espace plus.
-  // On répartit dans la zone dispo en partant du minSpacing.
+  // Spacing X et Y : étirement modéré (max 1.15x le minSpacing)
+  // pour éviter que les dés soient trop éparpillés.
   let spacingX = minSpacing;
   let spacingY = minSpacing;
-  // Si l'espace dispo est plus grand que minimal × (cols-1), on étire un peu
-  // (mais sans dépasser ~1.4x le minSpacing pour éviter les dés trop écartés)
   if (cols > 1) {
-    const idealX = availW / (cols - 0.2); // un peu d'air sur les bords
-    spacingX = Math.max(minSpacing, Math.min(idealX, minSpacing * 1.4));
+    const idealX = availW / (cols - 0.2);
+    spacingX = Math.max(minSpacing, Math.min(idealX, minSpacing * 1.15));
   }
   if (rows > 1) {
     const availH = Math.max(0, rect.height - 2 * padY);
     const idealY = availH / (rows - 0.2);
-    spacingY = Math.max(minSpacing, Math.min(idealY, minSpacing * 1.4));
+    spacingY = Math.max(minSpacing, Math.min(idealY, minSpacing * 1.15));
   }
 
-  // Randomisation très légère (max 3px) pour donner un look "lancé naturel"
-  // sans risquer le chevauchement.
-  const jitter = Math.min(3, (spacingX - minSpacing) / 4);
+  // Randomisation très légère (max 2px)
+  const jitter = Math.min(2, (spacingX - minSpacing) / 4);
 
   const targets = [];
   for (let i = 0; i < n; i++) {
@@ -3575,7 +3579,6 @@ function showCardWithAnimation(card, skipAnimation) {
   if (skipAnimation) {
     setCardFace(card);
     if (DOM.cardDesc) DOM.cardDesc.textContent = card.desc;
-    toast(`Carte: ${card.name}`, 'info');
     return;
   }
   // Animation slide : sort à gauche, entre à droite
@@ -3593,7 +3596,6 @@ function showCardWithAnimation(card, skipAnimation) {
 
   setTimeout(()=>{
     DOM.cardDesc.textContent = card.desc;
-    toast(`Carte: ${card.name}`, 'info');
     DOM.card.classList.remove('sliding-in');
   }, 800);
 }
@@ -4040,7 +4042,6 @@ function aiTurn() {
 
   ai.chosen = bestChoice;
   renderStats();
-  toast(`${ai.name} choisit ${bestChoice} dé${bestChoice>1?'s':''}`, 'info');
   previewDice(aiIdx, bestChoice);
   setTimeout(()=> doFirstRoll(), 1100);
 }
@@ -4081,10 +4082,8 @@ function aiDecideReroll() {
   }
 
   if (shouldReroll) {
-    toast(`${ai.name} relance !`, 'info');
     setTimeout(()=> doReroll(), 900);
   } else {
-    toast(`${ai.name} valide son lancer`, 'info');
     setTimeout(()=> aiValidate(), 600);
   }
 }
@@ -4250,23 +4249,9 @@ function afterRoll(playerIdx) {
 
   const bossCount = values.filter(v => v === 6).length;
   const bossStr = bossCount > 0 ? ` (${bossCount} boss)` : '';
-  const rollLabel = `Lancer ${player.rollsUsed}/${MAX_ROLLS}`;
-
-  if (valid) {
-    toast(`${player.name} ${rollLabel}: ${sum} pts${bossStr}`, 'success');
-  } else {
-    if (card.explosive) {
-      toast(`💥 ${player.name} — CARTE EXPLOSIVE déclenchée !`, 'error');
-    } else {
-      // Carte bombe : message doux qui informe qu'il peut relancer
-      const rollsLeft = MAX_ROLLS - player.rollsUsed;
-      if (rollsLeft > 0) {
-        toast(`${player.name}: ${rollLabel} — ${rollsLeft} relance${rollsLeft>1?'s':''} possible${rollsLeft>1?'s':''}`, 'info');
-      } else {
-        toast(`${player.name}: lancer final invalidé`, 'error');
-      }
-    }
-  }
+  // Toasts de score retirés pour épurer l'écran : le score s'affiche déjà
+  // sur le tapis du joueur (mat-score). Seuls les events critiques restent
+  // (vainqueur de manche, déconnexions, etc.).
 
   // ⚡ CARTE EXPLOSIVE + lancer invalide → fin de tour immédiate, pas de relance
   if (!valid && card.explosive) {
@@ -4297,7 +4282,6 @@ function afterRoll(playerIdx) {
       } else {
         // Plus de lancers : auto-validation après 1s
         setRerollMode(false, 0);
-        toast('Plus de lancers disponibles', 'info');
         // En multi : seul l'hôte déclenche validateRoll automatiquement
         if (!multi.enabled || multi.isHost) {
           setTimeout(()=> validateRoll(), 1200);
@@ -4309,7 +4293,6 @@ function afterRoll(playerIdx) {
       // lancers, l'hôte auto-valide à sa place (l'hôte est l'autorité).
       setWaitingMode();
       if (multi.enabled && multi.isHost && rollsLeft <= 0) {
-        toast(`${player.name} : plus de lancers disponibles`, 'info');
         setTimeout(()=> validateRoll(), 1400);
       }
     }
@@ -4413,7 +4396,7 @@ function endRound() {
   const bonus = CONFIG.bonusDice[state.round] || 0;
   if (bonus > 0) {
     pot += bonus;
-    toast(`+${bonus} dés bonus dans le pot !`, 'info');
+    // Pas de toast : le badge "+X dés bonus" est déjà affiché à droite de la carte
   }
 
   // Détermination du gagnant parmi N joueurs
@@ -4686,6 +4669,9 @@ DOM.btnRoll.addEventListener('click', ()=> {
             if (d.selectedForReroll) indices.push(i);
           });
         }
+        console.log('[Client→Host] RELANCER envoie indices:', indices,
+                    '(0=relance tout, sinon ne relance que ces dés)',
+                    'scene.dice.length=', scene ? scene.dice.length : 0);
         sendActionToHost('reroll', { indices });
         playSound();
         return;
@@ -5691,6 +5677,8 @@ function onPlayerFirstRoll(playerIdx) {
 }
 function onPlayerReroll(playerIdx, indices) {
   if (state.phase !== 'rerolling' || state.currentPlayer !== playerIdx) return;
+  console.log('[Host] reroll reçu pour joueur', playerIdx, 'indices=', indices,
+              '→', indices && indices.length > 0 ? `relance ${indices.length} dé(s)` : 'relance TOUT');
   // Marquer les dés sélectionnés selon les indices reçus
   if (indices && indices.length > 0) {
     const scene = scenes[playerIdx];
