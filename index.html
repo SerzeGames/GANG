@@ -4669,6 +4669,8 @@ DOM.btnRoll.addEventListener('click', ()=> {
         console.log('[Client→Host] RELANCER envoie indices:', indices,
                     '(0=relance tout, sinon ne relance que ces dés)',
                     'scene.dice.length=', scene ? scene.dice.length : 0);
+        // DEBUG visible : toast pour voir le résultat même sans console
+        toast(`DEBUG: envoi indices=[${indices.join(',')}] / ${scene ? scene.dice.length : 0} dés`, 'info');
         sendActionToHost('reroll', { indices });
         playSound();
         return;
@@ -5676,6 +5678,8 @@ function onPlayerReroll(playerIdx, indices) {
   if (state.phase !== 'rerolling' || state.currentPlayer !== playerIdx) return;
   console.log('[Host] reroll reçu pour joueur', playerIdx, 'indices=', indices,
               '→', indices && indices.length > 0 ? `relance ${indices.length} dé(s)` : 'relance TOUT');
+  // DEBUG visible : toast pour voir ce que l'hôte reçoit
+  toast(`DEBUG hôte: reçu indices=[${(indices||[]).join(',')}] de joueur ${playerIdx}`, 'info');
   // Marquer les dés sélectionnés selon les indices reçus
   if (indices && indices.length > 0) {
     const scene = scenes[playerIdx];
