@@ -2328,50 +2328,47 @@ function attachHumanCanvasHandlers() {
   const canvas = canvases[myIdx];
   if (!canvas) return;
 
-  // Flag pour éviter le double-déclenchement touch + click synthétique
-  // (sur mobile, après un touchend, le navigateur génère un 'click' fantôme)
-  let lastTouchTime = 0;
+  // CSS : empêcher la sélection de texte et les comportements tactiles
+  // par défaut qui peuvent interférer avec le hit-testing
+  canvas.style.touchAction = 'none';
+  canvas.style.webkitUserSelect = 'none';
+  canvas.style.userSelect = 'none';
 
-  // Handler unifié click/tap : toggle la sélection du dé tapé
+  // Handler unifié : pointerdown couvre souris ET tactile en un seul événement
+  // Pas de double-trigger possible.
   const handleTap = (clientX, clientY, source) => {
-    if (!canSelectDice()) return;
+    if (!canSelectDice()) {
+      console.log('[Dice tap] Ignoré : canSelectDice=false (phase=', state.phase,
+                  ', currentPlayer=', state.currentPlayer, ', myIdx=', myIdx, ')');
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     const pos = { x: clientX - rect.left, y: clientY - rect.top };
     const scene = scenes[myIdx];
-    if (!scene) return;
+    if (!scene) {
+      console.log('[Dice tap] Ignoré : scene introuvable pour myIdx=', myIdx);
+      return;
+    }
     const sorted = [...scene.dice].filter(d => d.state === 'rested')
                                    .sort((a,b)=> b.y - a.y);
     for (const d of sorted) {
       if (d.containsPoint(pos.x, pos.y)) {
         d.selectedForReroll = !d.selectedForReroll;
-        console.log('[Dice click via', source, '] Toggled die at index',
+        console.log('[Dice tap via', source, '] Toggled die at index',
                     scene.dice.indexOf(d), 'selected=', d.selectedForReroll);
         playSound();
         updateRerollButtonLabel();
         return;
       }
     }
+    console.log('[Dice tap] Aucun dé sous le pointeur (', pos.x, pos.y, ')');
   };
 
-  canvas.addEventListener('click', (e)=>{
-    // Si un touchend a eu lieu il y a moins de 500ms, on IGNORE ce click
-    // car c'est le click "fantôme" synthétisé par le navigateur après le tap
-    if (Date.now() - lastTouchTime < 500) {
-      e.preventDefault();
-      return;
-    }
-    handleTap(e.clientX, e.clientY, 'click');
+  canvas.addEventListener('pointerdown', (e)=>{
+    // pointerdown couvre souris (pointerType=mouse) ET tactile (pointerType=touch)
+    e.preventDefault();
+    handleTap(e.clientX, e.clientY, e.pointerType || 'pointer');
   });
-
-  // Handler tactile explicite (mobile)
-  canvas.addEventListener('touchend', (e)=>{
-    if (e.changedTouches && e.changedTouches.length > 0) {
-      e.preventDefault();
-      lastTouchTime = Date.now();
-      const t = e.changedTouches[0];
-      handleTap(t.clientX, t.clientY, 'touch');
-    }
-  }, { passive: false });
 
   canvas.addEventListener('mousemove', (e)=>{
     const scene = scenes[myIdx];
