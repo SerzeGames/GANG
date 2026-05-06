@@ -4162,6 +4162,14 @@ function doReroll() {
 
   const rerollAll = selectedIndices.length === 0;
 
+  // DEBUG : montrer ce que doReroll voit au moment de décider
+  if (multi.enabled && multi.isHost) {
+    const isHum = state.players[playerIdx].isHuman;
+    const sceneSize = scene ? scene.dice.length : 0;
+    const selStates = scene ? scene.dice.map(d => d.selectedForReroll ? '1' : '0').join('') : '?';
+    toast(`DEBUG doReroll: pIdx=${playerIdx} isHuman=${isHum} sceneSize=${sceneSize} sel=${selStates} → rerollAll=${rerollAll}`, 'info');
+  }
+
   if (rerollAll) {
     clearDice(playerIdx);
     const values = Array.from({length: player.chosen}, ()=> 1 + Math.floor(Math.random()*6));
