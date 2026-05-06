@@ -2337,31 +2337,21 @@ function attachHumanCanvasHandlers() {
   // Handler unifié : pointerdown couvre souris ET tactile en un seul événement
   // Pas de double-trigger possible.
   const handleTap = (clientX, clientY, source) => {
-    if (!canSelectDice()) {
-      console.log('[Dice tap] Ignoré : canSelectDice=false (phase=', state.phase,
-                  ', currentPlayer=', state.currentPlayer, ', myIdx=', myIdx, ')');
-      return;
-    }
+    if (!canSelectDice()) return;
     const rect = canvas.getBoundingClientRect();
     const pos = { x: clientX - rect.left, y: clientY - rect.top };
     const scene = scenes[myIdx];
-    if (!scene) {
-      console.log('[Dice tap] Ignoré : scene introuvable pour myIdx=', myIdx);
-      return;
-    }
+    if (!scene) return;
     const sorted = [...scene.dice].filter(d => d.state === 'rested')
                                    .sort((a,b)=> b.y - a.y);
     for (const d of sorted) {
       if (d.containsPoint(pos.x, pos.y)) {
         d.selectedForReroll = !d.selectedForReroll;
-        console.log('[Dice tap via', source, '] Toggled die at index',
-                    scene.dice.indexOf(d), 'selected=', d.selectedForReroll);
         playSound();
         updateRerollButtonLabel();
         return;
       }
     }
-    console.log('[Dice tap] Aucun dé sous le pointeur (', pos.x, pos.y, ')');
   };
 
   canvas.addEventListener('pointerdown', (e)=>{
@@ -4162,14 +4152,6 @@ function doReroll() {
 
   const rerollAll = selectedIndices.length === 0;
 
-  // DEBUG : montrer ce que doReroll voit au moment de décider
-  if (multi.enabled && multi.isHost) {
-    const isHum = state.players[playerIdx].isHuman;
-    const sceneSize = scene ? scene.dice.length : 0;
-    const selStates = scene ? scene.dice.map(d => d.selectedForReroll ? '1' : '0').join('') : '?';
-    toast(`DEBUG doReroll: pIdx=${playerIdx} isHuman=${isHum} sceneSize=${sceneSize} sel=${selStates} → rerollAll=${rerollAll}`, 'info');
-  }
-
   if (rerollAll) {
     clearDice(playerIdx);
     const values = Array.from({length: player.chosen}, ()=> 1 + Math.floor(Math.random()*6));
@@ -4674,11 +4656,6 @@ DOM.btnRoll.addEventListener('click', ()=> {
             if (d.selectedForReroll) indices.push(i);
           });
         }
-        console.log('[Client→Host] RELANCER envoie indices:', indices,
-                    '(0=relance tout, sinon ne relance que ces dés)',
-                    'scene.dice.length=', scene ? scene.dice.length : 0);
-        // DEBUG visible : toast pour voir le résultat même sans console
-        toast(`DEBUG: envoi indices=[${indices.join(',')}] / ${scene ? scene.dice.length : 0} dés`, 'info');
         sendActionToHost('reroll', { indices });
         playSound();
         return;
@@ -5615,30 +5592,56 @@ function applyRemoteRoll(playerIdx, values, isReroll, rerollIndices) {
   const player = state.players[playerIdx];
   if (!player) return;
 
-  console.log('[Multi/Guest] Lancer reçu de joueur', playerIdx, ':', values);
+  console.log('[Multi/Guest] Lancer reçu de joueur', playerIdx, ':', values,
+              'isReroll=', isReroll, 'rerollIndices=', rerollIndices);
 
   // Tenter de débloquer l'audio (sans bruit) puis jouer le son
   unlockAudio();
   playSound();
 
   if (isReroll && rerollIndices && rerollIndices.length > 0) {
-    // Relance partielle : on remplace seulement les valeurs sélectionnées
+    // Relance PARTIELLE : on remplace seulement les dés sélectionnés.
+    // Mêmes positions que les dés actuels (les autres ne bougent pas).
     const newValues = [...player.currentValues];
     for (let i = 0; i < rerollIndices.length; i++) {
       newValues[rerollIndices[i]] = values[i];
     }
     player.currentValues = newValues;
-  } else {
-    player.currentValues = values;
-  }
-  player.rollsUsed = (player.rollsUsed || 0) + 1;
+    player.rollsUsed = (player.rollsUsed || 0) + 1;
 
-  // Animation : relancer ces valeurs
-  // (Pour simplifier en V1 : on utilise la même logique que startRoll en local)
-  startRoll(playerIdx, player.currentValues, ()=> {
-    // afterRoll est calculé localement (pour les animations / sons)
-    // mais l'état de validité sera resync par l'hôte si besoin
-  });
+    const scene = scenes[playerIdx];
+    if (!scene || !canvases[playerIdx]) return;
+
+    resizeCanvas();
+    const rect = canvases[playerIdx].getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2 + 10;
+
+    // Remplacer seulement les dés concernés, garder les autres en place
+    for (const idx of rerollIndices) {
+      const oldDie = scene.dice[idx];
+      // Conserver la position cible si possible
+      const tx = oldDie ? oldDie.targetX : (rect.width / 2);
+      const ty = oldDie ? oldDie.targetY : (rect.height / 2);
+      const newDie = new Die3D(newValues[idx], idx, player.chosen);
+      newDie.start(cx, cy, tx, ty);
+      scene.dice[idx] = newDie;
+    }
+
+    // Réinitialiser la sélection visuelle (croix dorée)
+    for (const d of scene.dice) d.selectedForReroll = false;
+
+    scene.rolling = true;
+    scene.onComplete = ()=> { /* afterRoll est piloté par l'hôte via sync */ };
+  } else {
+    // Lancer initial OU relance complète : recrée tous les dés
+    player.currentValues = values;
+    player.rollsUsed = (player.rollsUsed || 0) + 1;
+    startRoll(playerIdx, player.currentValues, ()=> {
+      // afterRoll est calculé localement (pour les animations / sons)
+      // mais l'état de validité sera resync par l'hôte si besoin
+    });
+  }
 }
 
 // Quitter une partie multi : nettoie tout
@@ -5684,10 +5687,6 @@ function onPlayerFirstRoll(playerIdx) {
 }
 function onPlayerReroll(playerIdx, indices) {
   if (state.phase !== 'rerolling' || state.currentPlayer !== playerIdx) return;
-  console.log('[Host] reroll reçu pour joueur', playerIdx, 'indices=', indices,
-              '→', indices && indices.length > 0 ? `relance ${indices.length} dé(s)` : 'relance TOUT');
-  // DEBUG visible : toast pour voir ce que l'hôte reçoit
-  toast(`DEBUG hôte: reçu indices=[${(indices||[]).join(',')}] de joueur ${playerIdx}`, 'info');
   // Marquer les dés sélectionnés selon les indices reçus
   if (indices && indices.length > 0) {
     const scene = scenes[playerIdx];
