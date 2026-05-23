@@ -4411,13 +4411,15 @@ function aiDecideReroll() {
   //           a) on peut grosse amélioration sans risque (relance ciblée)
   //           b) le score actuel est faible ET on a des dés "inutiles"
   //              (boss ou contributeurs faibles à relancer)
-  const penaltyForFail = card.explosive ? 12 : 3;
+  //
+  // Pénalité d'échec :
+  // - Carte explosive : 12 pts (perdre ça coûte cher, invalide tout)
+  // - Carte bombe : 0 pts (un échec = juste perdre le tour courant, pas plus)
+  //   Donc pour les bombes, comparer juste l'espérance × probabilité
+  const penaltyForFail = card.explosive ? 12 : 0;
   const currentUtility = currentSum;
 
   // Détection de "dés inutiles" qui justifient une relance même en avance/au début
-  // - Un boss (6) ne contribue pas au score, autant tenter
-  // - Sur les cartes "somme < X" avec marge, les faibles sont à risque mais
-  //   peuvent grimper sans dépasser
   const hasBoss = ai.currentValues.some(v => v === 6);
   const lowScoreThreshold = ai.chosen * 2.5; // un score "correct" = ~2.5 par dé en moyenne
   const isLowScore = currentSum < lowScoreThreshold;
@@ -4429,10 +4431,9 @@ function aiDecideReroll() {
   const fullUtility = full.expectedSum * full.successRate - penaltyForFail * (1 - full.successRate);
 
   // Seuil de relance ciblée : plus permissif si on a un boss ou un score faible
-  // (la relance ciblée est peu risquée car on garde les bons dés)
-  let partialThreshold = 1.5;
-  if (hasBoss) partialThreshold = 0.0; // si on a un boss, on essaye toujours
-  if (isLowScore) partialThreshold = Math.min(partialThreshold, 0.5);
+  let partialThreshold = 1.0;
+  if (hasBoss) partialThreshold = -0.5; // si on a un boss, on relance même pour un gain léger
+  if (isLowScore) partialThreshold = Math.min(partialThreshold, 0.0);
 
   if (partial && targetedIndices.length > 0 && partialUtility > currentUtility + partialThreshold) {
     return executeReroll(partial, full, targetedIndices, false, 'partial');
