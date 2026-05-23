@@ -4049,7 +4049,15 @@ function aiPickDiceToReroll(card, values) {
   const n = values.length;
   const idsToReroll = [];
 
-  // 1) Cartes "valeurs interdites" → relancer SEULEMENT les dés interdits
+  // Helper : valeurs filtrées (sans les 6/boss qui comptent 0)
+  // Pour la stratégie, on travaille sur values entières (le boss=6 est en réalité
+  // un "vide" qui ne contribue ni au score ni aux contraintes).
+  const isBoss = (v) => v === 6;
+  // Helper : un dé est-il "faible" (peu utile au score) ?
+  const isWeak = (v) => v === 1 || v === 2 || v === 6;
+
+  // 1) Cartes "valeurs interdites" : ban135, ban345, ban45
+  //    → relancer SEULEMENT les dés ayant la valeur interdite
   if (card.id === 'ban135') {
     for (let i = 0; i < n; i++) {
       if (values[i] === 1 || values[i] === 3 || values[i] === 5) idsToReroll.push(i);
@@ -4069,132 +4077,211 @@ function aiPickDiceToReroll(card, values) {
     return idsToReroll;
   }
 
-  // 2) Carte "au moins un 1"
-  if (card.id === 'one') {
-    const hasOne = values.some(v => v === 1);
-    if (hasOne) {
-      // Garder le premier 1, relancer les autres dés faibles pour maximiser
-      const oneIdx = values.indexOf(1);
-      for (let i = 0; i < n; i++) {
-        if (i !== oneIdx && values[i] <= 3) idsToReroll.push(i);
-      }
-      return idsToReroll;
+  // 2) Carte "Pas de 1" (has1exp) : EXPLOSIVE si contient un 1
+  //    → relancer SEULEMENT les 1
+  if (card.id === 'has1exp') {
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 1) idsToReroll.push(i);
     }
-    // Aucun 1 : relancer les dés faibles (un dé à 1/6 chance de tomber sur 1)
-    return findIndicesOfSmallest(values, Math.min(2, n));
+    return idsToReroll;
   }
 
-  // 3) Cartes "somme ≥ X"
+  // 3) Cartes "somme < X" (invalide si somme >= X)
+  //    sum7 (<7), sum10 (<10), sum11 (<11), sum13 (<13)
+  //    → ON VEUT RESTER SOUS LE SEUIL, donc on relance les dés FORTS (5)
+  //      pour avoir une valeur plus basse, et les boss (6 = 0 valeur, autant tenter mieux)
   if (card.id === 'sum7' || card.id === 'sum10' || card.id === 'sum11' || card.id === 'sum13') {
     const currentSum = diceSum(values);
     const threshold = card.id === 'sum7' ? 7
                     : card.id === 'sum10' ? 10
                     : card.id === 'sum11' ? 11 : 13;
+    const maxAllowed = threshold - 1; // le score maximum visé
+
+    // CAS A : déjà au-dessus du seuil (invalide) → relancer les forts (qui font dépasser)
     if (currentSum >= threshold) {
-      // Déjà au-dessus : ne relancer que les dés très faibles (≤2)
-      // ET seulement si le risque est acceptable
+      // Relancer les plus grandes valeurs pour faire baisser
+      // (un dé à 5 sera probablement remplacé par 3.5 en moyenne)
+      const sorted = values.map((v,i) => ({v,i}))
+                           .filter(x => !isBoss(x.v))
+                           .sort((a,b) => b.v - a.v);
+      // Relancer le plus grand dé (et plus si nécessaire)
+      const excess = currentSum - maxAllowed;
+      let removed = 0;
+      for (const {v, i} of sorted) {
+        idsToReroll.push(i);
+        removed += v;
+        if (removed >= excess + 2) break; // marge
+      }
+      // Relancer aussi les boss (ils ne contribuent à rien, autant tenter mieux)
       for (let i = 0; i < n; i++) {
-        if (values[i] <= 2) {
-          // Marge de sécurité : la somme sans ce dé + une valeur minimum (1) doit
-          // rester au-dessus du seuil
-          if (currentSum - values[i] + 1 >= threshold - 1) {
-            idsToReroll.push(i);
+        if (isBoss(values[i]) && !idsToReroll.includes(i)) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+
+    // CAS B : sous le seuil mais score faible → relancer les boss (= dés à 0)
+    //         et les très petites valeurs (1, 2) pour grimper vers le max
+    //         SANS dépasser le seuil.
+    // Marge dispo : maxAllowed - currentSum (combien on peut encore gagner)
+    const margin = maxAllowed - currentSum;
+    for (let i = 0; i < n; i++) {
+      if (isBoss(values[i])) {
+        // Boss : on peut le relancer si la marge permet (espérance 3.5)
+        // Si margin >= 4, on est tranquille ; si <4, on évite (risque trop élevé)
+        if (margin >= 3) idsToReroll.push(i);
+      } else if (values[i] <= 2 && margin >= 4) {
+        // Petite valeur : on peut tenter mieux si on a au moins 4 de marge
+        // (la nouvelle valeur sera entre 1 et 6, espérance 3.5)
+        idsToReroll.push(i);
+      }
+    }
+    return idsToReroll;
+  }
+
+  // 4) Cartes "≥X dés impairs" interdits : odd2 (≥2 invalide), odd3exp (≥3 invalide)
+  //    → relancer SEULEMENT les dés impairs (1, 3, 5) pour réduire leur nombre
+  if (card.id === 'odd2' || card.id === 'odd3exp') {
+    const minOdd = card.id === 'odd2' ? 2 : 3;
+    const oddCount = values.filter(v => v === 1 || v === 3 || v === 5).length;
+    if (oddCount >= minOdd) {
+      // Invalide : trop d'impairs, relancer (au moins) les impairs pour qu'il en reste
+      // strictement moins que minOdd
+      const oddIndices = [];
+      for (let i = 0; i < n; i++) {
+        if (values[i] === 1 || values[i] === 3 || values[i] === 5) oddIndices.push(i);
+      }
+      // Relancer juste assez : oddCount - (minOdd - 1) dés
+      const toRemove = oddCount - (minOdd - 1);
+      // Préférer relancer les impairs faibles (1) en priorité
+      oddIndices.sort((a, b) => values[a] - values[b]);
+      return oddIndices.slice(0, toRemove);
+    }
+    // OK, score actuel valide → relancer les boss et faibles non-impairs (2)
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 2 || values[i] === 6) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 5) Carte "Deux 5 ou plus" (twoFives) : EXPLOSIVE si ≥2 cinqs
+  //    → relancer SEULEMENT les 5 (si on en a 2+) pour réduire leur nombre
+  if (card.id === 'twoFives') {
+    const fivesCount = values.filter(v => v === 5).length;
+    if (fivesCount >= 2) {
+      // Invalide : relancer (fivesCount - 1) cinqs au minimum
+      const fivesIdx = [];
+      for (let i = 0; i < n; i++) {
+        if (values[i] === 5) fivesIdx.push(i);
+      }
+      return fivesIdx.slice(0, fivesCount - 1);
+    }
+    // Valide : relancer les boss et les très faibles
+    for (let i = 0; i < n; i++) {
+      if (values[i] <= 2 || values[i] === 6) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 6) Cartes "≥X valeurs différentes" interdites : diff2 (≥2 différentes invalide),
+  //    diff3exp (≥3 invalide)
+  //    → essayer d'avoir TOUS les dés identiques (ou au plus minDiff-1 valeurs distinctes)
+  if (card.id === 'diff2' || card.id === 'diff3exp') {
+    const minDiff = card.id === 'diff2' ? 2 : 3;
+    const distinct = new Set(values.filter(v => !isBoss(v))).size;
+    if (distinct >= minDiff) {
+      // Trop de valeurs différentes : relancer les "uniques" pour matcher la majorité
+      // Comptage des occurrences
+      const counts = {};
+      for (const v of values) {
+        if (!isBoss(v)) counts[v] = (counts[v] || 0) + 1;
+      }
+      // Trouver la valeur la plus fréquente
+      let maxVal = null, maxCount = 0;
+      for (const v in counts) {
+        if (counts[v] > maxCount) { maxCount = counts[v]; maxVal = parseInt(v); }
+      }
+      // Relancer tous les dés qui ne sont pas de cette valeur majoritaire (sauf boss)
+      for (let i = 0; i < n; i++) {
+        if (!isBoss(values[i]) && values[i] !== maxVal) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    // Valide : relancer les boss
+    for (let i = 0; i < n; i++) {
+      if (isBoss(values[i])) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 7) Cartes "paire" interdite : pair, pairExp
+  //    → si paire présente, relancer pour casser la paire
+  if (card.id === 'pair' || card.id === 'pairExp') {
+    if (hasPair(values)) {
+      // Trouver les paires et relancer un dé de chaque paire (le plus faible)
+      const counts = {};
+      for (let i = 0; i < n; i++) {
+        if (isBoss(values[i])) continue;
+        if (!counts[values[i]]) counts[values[i]] = [];
+        counts[values[i]].push(i);
+      }
+      for (const v in counts) {
+        if (counts[v].length >= 2) {
+          // Garder le premier, relancer le(s) doublon(s)
+          for (let k = 1; k < counts[v].length; k++) {
+            idsToReroll.push(counts[v][k]);
           }
         }
       }
       return idsToReroll;
     }
-    // Sous le seuil : relancer les dés faibles
+    // Pas de paire : valide → relancer juste les boss pour tenter mieux
     for (let i = 0; i < n; i++) {
-      if (values[i] < 4) idsToReroll.push(i);
-    }
-    if (idsToReroll.length === 0) return []; // dés tous corrects, on retentera plus tard
-    return idsToReroll;
-  }
-
-  // 4) Cartes "≥X dés impairs"
-  if (card.id === 'odd2' || card.id === 'odd3') {
-    const minOdd = card.id === 'odd2' ? 2 : 3;
-    const oddCount = values.filter(v => v % 2 === 1).length;
-    if (oddCount >= minOdd) {
-      // OK : relancer juste les pairs faibles
-      for (let i = 0; i < n; i++) {
-        if (values[i] % 2 === 0 && values[i] <= 2) idsToReroll.push(i);
-      }
-      return idsToReroll;
-    }
-    // Pas assez d'impairs : relancer les pairs
-    for (let i = 0; i < n; i++) {
-      if (values[i] % 2 === 0) idsToReroll.push(i);
+      if (isBoss(values[i])) idsToReroll.push(i);
     }
     return idsToReroll;
   }
 
-  // 5) Carte "≥2 cinqs"
-  if (card.id === 'fives2') {
-    const fivesCount = values.filter(v => v === 5).length;
-    if (fivesCount >= 2) {
-      for (let i = 0; i < n; i++) {
-        if (values[i] !== 5 && values[i] <= 3) idsToReroll.push(i);
-      }
-      return idsToReroll;
-    }
-    for (let i = 0; i < n; i++) {
-      if (values[i] !== 5) idsToReroll.push(i);
-    }
-    return idsToReroll;
-  }
-
-  // 6) Cartes "≥X valeurs différentes"
-  if (card.id === 'diff2' || card.id === 'diff3') {
-    const minDiff = card.id === 'diff2' ? 2 : 3;
-    const distinct = new Set(values.filter(v => v !== 6)).size;
-    if (distinct >= minDiff) {
-      for (let i = 0; i < n; i++) {
-        if (values[i] <= 2) idsToReroll.push(i);
-      }
-      return idsToReroll;
-    }
-    // Relancer les doublons
-    const seen = {};
-    for (let i = 0; i < n; i++) {
-      if (values[i] === 6) continue;
-      if (seen[values[i]] !== undefined) {
-        idsToReroll.push(i);
-      } else {
-        seen[values[i]] = i;
-      }
-    }
-    return idsToReroll;
-  }
-
-  // 7) Cartes "paire"
-  if (card.id === 'pair' || card.id === 'pairExp') {
-    if (hasPair(values)) {
-      for (let i = 0; i < n; i++) {
-        if (values[i] <= 2) idsToReroll.push(i);
-      }
-      return idsToReroll;
-    }
-    // Pas de paire : relancer la moitié pour essayer d'en former une
-    return findIndicesOfSmallest(values, Math.max(1, Math.floor(n / 2)));
-  }
-
-  // 8) Cartes "consécutifs"
-  if (card.id === 'cons2' || card.id === 'cons2Exp' || card.id === 'cons3') {
-    const needConsec = card.id === 'cons3' ? 3 : 2;
+  // 8) Cartes "consécutifs" interdites : consec2, consec2exp, consec3exp
+  //    → si consécutifs présents, briser la séquence
+  if (card.id === 'consec2' || card.id === 'consec2exp' || card.id === 'consec3exp') {
+    const needConsec = card.id === 'consec3exp' ? 3 : 2;
     if (hasConsecutive(values, needConsec)) {
-      for (let i = 0; i < n; i++) {
-        if (values[i] <= 2) idsToReroll.push(i);
+      // Trouver les dés impliqués dans des suites consécutives
+      // Stratégie : trier valeurs uniques et identifier les chaînes
+      const valSet = new Set(values.filter(v => !isBoss(v)));
+      const sortedVals = [...valSet].sort((a,b) => a-b);
+      // Détecter les chaînes
+      const involved = new Set();
+      for (let i = 0; i < sortedVals.length - (needConsec - 1); i++) {
+        let chain = true;
+        for (let k = 1; k < needConsec; k++) {
+          if (sortedVals[i+k] !== sortedVals[i] + k) { chain = false; break; }
+        }
+        if (chain) {
+          for (let k = 0; k < needConsec; k++) involved.add(sortedVals[i+k]);
+        }
       }
+      // Relancer le dé de plus faible valeur impliqué dans une chaîne
+      // (pour casser sans perdre trop de score)
+      const chainIndices = [];
+      for (let i = 0; i < n; i++) {
+        if (involved.has(values[i])) chainIndices.push(i);
+      }
+      chainIndices.sort((a, b) => values[a] - values[b]);
+      // Relancer juste 1 dé de la chaîne (suffit pour casser)
+      if (chainIndices.length > 0) return [chainIndices[0]];
       return idsToReroll;
     }
-    return findIndicesOfSmallest(values, Math.max(1, Math.floor(n / 2)));
+    // Pas de consécutifs : valide → relancer les boss
+    for (let i = 0; i < n; i++) {
+      if (isBoss(values[i])) idsToReroll.push(i);
+    }
+    return idsToReroll;
   }
 
-  // Fallback générique : dés faibles
+  // Fallback : relancer les dés faibles ou les boss
   for (let i = 0; i < n; i++) {
-    if (values[i] <= 2) idsToReroll.push(i);
+    if (isWeak(values[i])) idsToReroll.push(i);
   }
   return idsToReroll;
 }
@@ -4319,10 +4406,21 @@ function aiDecideReroll() {
     }
   }
 
-  // CAS 3 : On a un score CORRECT (en avance ou pas d'adversaire encore joué)
-  //         → Valider sauf si on peut grosse amélioration sans risque
+  // CAS 3 : On a un score CORRECT (en avance) OU on commence (rivalScore=0)
+  //         → Valider sauf si :
+  //           a) on peut grosse amélioration sans risque (relance ciblée)
+  //           b) le score actuel est faible ET on a des dés "inutiles"
+  //              (boss ou contributeurs faibles à relancer)
   const penaltyForFail = card.explosive ? 12 : 3;
   const currentUtility = currentSum;
+
+  // Détection de "dés inutiles" qui justifient une relance même en avance/au début
+  // - Un boss (6) ne contribue pas au score, autant tenter
+  // - Sur les cartes "somme < X" avec marge, les faibles sont à risque mais
+  //   peuvent grimper sans dépasser
+  const hasBoss = ai.currentValues.some(v => v === 6);
+  const lowScoreThreshold = ai.chosen * 2.5; // un score "correct" = ~2.5 par dé en moyenne
+  const isLowScore = currentSum < lowScoreThreshold;
 
   // Utilité = espérance pondérée par succès, moins pénalité × proba échec
   const partialUtility = partial
@@ -4330,12 +4428,19 @@ function aiDecideReroll() {
     : -Infinity;
   const fullUtility = full.expectedSum * full.successRate - penaltyForFail * (1 - full.successRate);
 
-  // Préférer la relance ciblée si elle apporte au moins +1.5 pts d'utilité
-  if (partial && partialUtility > currentUtility + 1.5) {
+  // Seuil de relance ciblée : plus permissif si on a un boss ou un score faible
+  // (la relance ciblée est peu risquée car on garde les bons dés)
+  let partialThreshold = 1.5;
+  if (hasBoss) partialThreshold = 0.0; // si on a un boss, on essaye toujours
+  if (isLowScore) partialThreshold = Math.min(partialThreshold, 0.5);
+
+  if (partial && targetedIndices.length > 0 && partialUtility > currentUtility + partialThreshold) {
     return executeReroll(partial, full, targetedIndices, false, 'partial');
   }
-  // Relance complète si gros gain potentiel (rare en avance)
-  if (fullUtility > currentUtility + 3.0 && rollsLeft >= 2) {
+  // Relance complète si gros gain potentiel
+  // Plus exigeant car on jette aussi les bons dés
+  const fullThreshold = isLowScore ? 1.5 : 3.0;
+  if (fullUtility > currentUtility + fullThreshold && rollsLeft >= 2) {
     return executeReroll(partial, full, targetedIndices, false, 'full');
   }
 
