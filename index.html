@@ -4208,8 +4208,11 @@ function findIndicesOfSmallest(values, k) {
 
 /**
  * Décide si l'IA relance et quels dés relancer.
- * Compare 3 options : valider | relancer ciblé | relancer tout.
- * Choisit celle de meilleure utilité (espérance × probabilité de succès).
+ * Logique stratégique en 4 étapes :
+ *   1) Si invalide → relance (jamais valider un échec si on peut relancer)
+ *   2) Si on est en retard sur l'adversaire → relance si chance de battre son score
+ *   3) Si on est en avance → valider (sauf gain potentiel énorme)
+ *   4) Si on commence (rivalScore=0) → valider si score correct, sinon relance
  */
 function aiDecideReroll() {
   const aiIdx = state.currentPlayer;
@@ -4226,14 +4229,17 @@ function aiDecideReroll() {
   // -- 1) Identifier les dés "problématiques" (ciblage stratégique) --
   const targetedIndices = aiPickDiceToReroll(card, ai.currentValues);
 
-  // -- 2) Simuler le résultat attendu d'une relance ciblée --
+  // -- 2) Simulation : relance ciblée --
   function simulatePartialReroll(indicesToReroll) {
     if (indicesToReroll.length === 0) {
-      return { expectedSum: currentValid ? currentSum : 0, successRate: currentValid ? 1 : 0 };
+      return { expectedSum: currentValid ? currentSum : 0,
+               successRate: currentValid ? 1 : 0,
+               probBeatRival: currentValid && currentSum > rivalScore ? 1 : 0 };
     }
     const trials = 500;
     let totalSum = 0;
     let successes = 0;
+    let beatsRival = 0;
     for (let t = 0; t < trials; t++) {
       const sim = [...ai.currentValues];
       for (const i of indicesToReroll) {
@@ -4241,101 +4247,129 @@ function aiDecideReroll() {
       }
       if (evalCardRule(card, sim)) {
         successes++;
-        totalSum += diceSum(sim);
+        const s = diceSum(sim);
+        totalSum += s;
+        if (s > rivalScore) beatsRival++;
       }
     }
     return {
       expectedSum: successes > 0 ? totalSum / successes : 0,
-      successRate: successes / trials
+      successRate: successes / trials,
+      probBeatRival: beatsRival / trials
     };
   }
 
-  // -- 3) Simuler le résultat attendu d'une relance complète --
+  // -- 3) Simulation : relance complète --
   function simulateFullReroll() {
     const trials = 500;
     let totalSum = 0;
     let successes = 0;
+    let beatsRival = 0;
     const n = ai.chosen;
     for (let t = 0; t < trials; t++) {
       const sim = Array.from({length: n}, ()=> 1 + Math.floor(Math.random() * 6));
       if (evalCardRule(card, sim)) {
         successes++;
-        totalSum += diceSum(sim);
+        const s = diceSum(sim);
+        totalSum += s;
+        if (s > rivalScore) beatsRival++;
       }
     }
     return {
       expectedSum: successes > 0 ? totalSum / successes : 0,
-      successRate: successes / trials
+      successRate: successes / trials,
+      probBeatRival: beatsRival / trials
     };
   }
 
-  // Pénalité d'échec : cartes explosives coûtent cher
-  const penaltyForFail = card.explosive ? 12 : 3;
-  // Utilité = (gain × probabilité de succès) - (perte × probabilité d'échec)
-  const utilityOf = (expected, rate) => expected * rate - penaltyForFail * (1 - rate);
-
-  // Utilité actuelle = ce qu'on a maintenant
-  const currentUtility = currentValid ? currentSum : -penaltyForFail;
   const partial = targetedIndices.length > 0 ? simulatePartialReroll(targetedIndices) : null;
   const full = simulateFullReroll();
 
-  const partialUtility = partial ? utilityOf(partial.expectedSum, partial.successRate) : -Infinity;
-  const fullUtility = utilityOf(full.expectedSum, full.successRate);
+  // === STRATÉGIE PRINCIPALE ===
 
-  // Bonus de "deuxième chance" si on a encore plusieurs relances
-  const safetyBonus = rollsLeft >= 2 ? 1.2 : 0;
-
-  // Bonus "être en retard" : si on est sous l'adversaire, il FAUT prendre des risques
-  const behindBonus = (rivalScore > 0 && currentSum < rivalScore) ? 2.5 : 0;
-
-  // -- 4) Décision --
-  let action = 'validate';
-  let chosenIndices = [];
-  let bestUtility = currentUtility;
-
-  // Option A : relance ciblée (uniquement les dés problématiques)
-  // Préférée car moins risquée (on garde les bons dés)
-  if (partial && partialUtility > bestUtility + 0.3) {
-    action = 'rerollPartial';
-    chosenIndices = targetedIndices;
-    bestUtility = partialUtility;
+  // CAS 1 : Lancer invalide → relance (jamais valider un échec)
+  if (!currentValid) {
+    return executeReroll(partial, full, targetedIndices, /*forceReroll*/ true);
   }
 
-  // Option B : relance complète si vraiment meilleure
-  // Plus risquée donc on demande un écart plus net
-  const fullThreshold = currentValid ? 2.0 : 0.3;
-  if (fullUtility + safetyBonus + behindBonus > bestUtility + fullThreshold) {
-    action = 'rerollAll';
-    chosenIndices = [];
-    bestUtility = fullUtility + safetyBonus + behindBonus;
-  }
+  // CAS 2 : On est EN RETARD sur l'adversaire (currentSum <= rivalScore)
+  //         → Valider = perdre à coup sûr. Il FAUT essayer de relancer.
+  if (rivalScore > 0 && currentSum <= rivalScore) {
+    // Comparer : "valider = perte certaine" vs "relancer = chance de gagner"
+    // Même 20% de chance de battre l'adversaire est meilleur que 0%.
 
-  // SAFETY : si invalide et qu'on a des relances, ne JAMAIS valider un lancer invalide
-  if (!currentValid && rollsLeft >= 1 && action === 'validate') {
-    if (partial && partialUtility >= fullUtility) {
-      action = 'rerollPartial';
-      chosenIndices = targetedIndices;
+    const partialBeatChance = partial ? partial.probBeatRival : 0;
+    const fullBeatChance = full.probBeatRival;
+
+    // On choisit l'option qui maximise la chance de battre l'adversaire
+    // (à moins que ça nous fasse tomber bien plus bas en cas d'échec)
+    if (partialBeatChance >= 0.1 && partialBeatChance >= fullBeatChance - 0.1) {
+      // Relance ciblée : moins risqué, on garde les bons dés
+      return executeReroll(partial, full, targetedIndices, /*forceReroll*/ true, 'partial');
+    } else if (fullBeatChance >= 0.05) {
+      // Relance complète : seule chance, on prend le risque
+      return executeReroll(partial, full, targetedIndices, /*forceReroll*/ true, 'full');
     } else {
-      action = 'rerollAll';
-      chosenIndices = [];
+      // Aucune option n'a plus de 5% de chance → relance quand même la ciblée
+      // (mieux que de valider une perte certaine)
+      if (targetedIndices.length > 0) {
+        return executeReroll(partial, full, targetedIndices, true, 'partial');
+      }
+      return executeReroll(partial, full, targetedIndices, true, 'full');
     }
   }
 
-  // -- 5) Exécution --
-  if (action === 'validate') {
-    setTimeout(()=> aiValidate(), 600);
-    return;
+  // CAS 3 : On a un score CORRECT (en avance ou pas d'adversaire encore joué)
+  //         → Valider sauf si on peut grosse amélioration sans risque
+  const penaltyForFail = card.explosive ? 12 : 3;
+  const currentUtility = currentSum;
+
+  // Utilité = espérance pondérée par succès, moins pénalité × proba échec
+  const partialUtility = partial
+    ? partial.expectedSum * partial.successRate - penaltyForFail * (1 - partial.successRate)
+    : -Infinity;
+  const fullUtility = full.expectedSum * full.successRate - penaltyForFail * (1 - full.successRate);
+
+  // Préférer la relance ciblée si elle apporte au moins +1.5 pts d'utilité
+  if (partial && partialUtility > currentUtility + 1.5) {
+    return executeReroll(partial, full, targetedIndices, false, 'partial');
+  }
+  // Relance complète si gros gain potentiel (rare en avance)
+  if (fullUtility > currentUtility + 3.0 && rollsLeft >= 2) {
+    return executeReroll(partial, full, targetedIndices, false, 'full');
   }
 
-  // Marquer les dés sélectionnés (auras dorées visuelles) AVANT le reroll
+  // Sinon : valider, on est satisfait du score
+  setTimeout(()=> aiValidate(), 600);
+}
+
+/**
+ * Exécute la décision de relance : marque les dés sélectionnés et lance doReroll.
+ * `mode` = 'partial' | 'full' (auto si non spécifié)
+ */
+function executeReroll(partial, full, targetedIndices, forceReroll, mode) {
+  const aiIdx = state.currentPlayer;
   const scene = scenes[aiIdx];
+
+  // Si mode non spécifié : choisir entre partial et full selon l'utilité
+  if (!mode) {
+    const partialU = partial ? (partial.expectedSum * partial.successRate) : -Infinity;
+    const fullU = full ? (full.expectedSum * full.successRate) : -Infinity;
+    mode = (partial && partialU >= fullU) ? 'partial' : 'full';
+  }
+
+  const chosenIndices = (mode === 'partial' && targetedIndices.length > 0)
+    ? targetedIndices
+    : [];
+
+  // Marquer les dés sélectionnés (auras dorées visuelles)
   if (scene) {
     scene.dice.forEach((d, i) => {
       d.selectedForReroll = chosenIndices.includes(i);
     });
   }
-  // Petit délai pour qu'on voie les dés sélectionnés visuellement
-  setTimeout(()=> doReroll(), action === 'rerollPartial' ? 1200 : 900);
+  // Délai pour qu'on voie visuellement les dés choisis
+  setTimeout(()=> doReroll(), mode === 'partial' ? 1200 : 900);
 }
 
 function aiValidate() {
