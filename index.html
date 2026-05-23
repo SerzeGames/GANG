@@ -4033,7 +4033,184 @@ function aiTurn() {
   setTimeout(()=> doFirstRoll(), 1100);
 }
 
-// Décide si l'IA relance ou valide
+// ===== INTELLIGENCE ARTIFICIELLE - DÉCISION DE RELANCE =====
+
+/**
+ * Décide quels dés relancer en fonction de la carte condition.
+ * Retourne un tableau d'indices (vide = aucun à relancer, sinon = ceux à relancer).
+ *
+ * Stratégie générale :
+ * - Identifier les "mauvais dés" (ceux qui rendent invalide ou faible)
+ * - Préserver les "bons dés" qui contribuent positivement
+ * - Adapter au type de carte (somme, paire, consécutifs, etc.)
+ */
+function aiPickDiceToReroll(card, values) {
+  if (!card || !values || values.length === 0) return [];
+  const n = values.length;
+  const idsToReroll = [];
+
+  // 1) Cartes "valeurs interdites" → relancer SEULEMENT les dés interdits
+  if (card.id === 'ban135') {
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 1 || values[i] === 3 || values[i] === 5) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+  if (card.id === 'ban345') {
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 3 || values[i] === 4 || values[i] === 5) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+  if (card.id === 'ban45') {
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 4 || values[i] === 5) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 2) Carte "au moins un 1"
+  if (card.id === 'one') {
+    const hasOne = values.some(v => v === 1);
+    if (hasOne) {
+      // Garder le premier 1, relancer les autres dés faibles pour maximiser
+      const oneIdx = values.indexOf(1);
+      for (let i = 0; i < n; i++) {
+        if (i !== oneIdx && values[i] <= 3) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    // Aucun 1 : relancer les dés faibles (un dé à 1/6 chance de tomber sur 1)
+    return findIndicesOfSmallest(values, Math.min(2, n));
+  }
+
+  // 3) Cartes "somme ≥ X"
+  if (card.id === 'sum7' || card.id === 'sum10' || card.id === 'sum11' || card.id === 'sum13') {
+    const currentSum = diceSum(values);
+    const threshold = card.id === 'sum7' ? 7
+                    : card.id === 'sum10' ? 10
+                    : card.id === 'sum11' ? 11 : 13;
+    if (currentSum >= threshold) {
+      // Déjà au-dessus : ne relancer que les dés très faibles (≤2)
+      // ET seulement si le risque est acceptable
+      for (let i = 0; i < n; i++) {
+        if (values[i] <= 2) {
+          // Marge de sécurité : la somme sans ce dé + une valeur minimum (1) doit
+          // rester au-dessus du seuil
+          if (currentSum - values[i] + 1 >= threshold - 1) {
+            idsToReroll.push(i);
+          }
+        }
+      }
+      return idsToReroll;
+    }
+    // Sous le seuil : relancer les dés faibles
+    for (let i = 0; i < n; i++) {
+      if (values[i] < 4) idsToReroll.push(i);
+    }
+    if (idsToReroll.length === 0) return []; // dés tous corrects, on retentera plus tard
+    return idsToReroll;
+  }
+
+  // 4) Cartes "≥X dés impairs"
+  if (card.id === 'odd2' || card.id === 'odd3') {
+    const minOdd = card.id === 'odd2' ? 2 : 3;
+    const oddCount = values.filter(v => v % 2 === 1).length;
+    if (oddCount >= minOdd) {
+      // OK : relancer juste les pairs faibles
+      for (let i = 0; i < n; i++) {
+        if (values[i] % 2 === 0 && values[i] <= 2) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    // Pas assez d'impairs : relancer les pairs
+    for (let i = 0; i < n; i++) {
+      if (values[i] % 2 === 0) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 5) Carte "≥2 cinqs"
+  if (card.id === 'fives2') {
+    const fivesCount = values.filter(v => v === 5).length;
+    if (fivesCount >= 2) {
+      for (let i = 0; i < n; i++) {
+        if (values[i] !== 5 && values[i] <= 3) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    for (let i = 0; i < n; i++) {
+      if (values[i] !== 5) idsToReroll.push(i);
+    }
+    return idsToReroll;
+  }
+
+  // 6) Cartes "≥X valeurs différentes"
+  if (card.id === 'diff2' || card.id === 'diff3') {
+    const minDiff = card.id === 'diff2' ? 2 : 3;
+    const distinct = new Set(values.filter(v => v !== 6)).size;
+    if (distinct >= minDiff) {
+      for (let i = 0; i < n; i++) {
+        if (values[i] <= 2) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    // Relancer les doublons
+    const seen = {};
+    for (let i = 0; i < n; i++) {
+      if (values[i] === 6) continue;
+      if (seen[values[i]] !== undefined) {
+        idsToReroll.push(i);
+      } else {
+        seen[values[i]] = i;
+      }
+    }
+    return idsToReroll;
+  }
+
+  // 7) Cartes "paire"
+  if (card.id === 'pair' || card.id === 'pairExp') {
+    if (hasPair(values)) {
+      for (let i = 0; i < n; i++) {
+        if (values[i] <= 2) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    // Pas de paire : relancer la moitié pour essayer d'en former une
+    return findIndicesOfSmallest(values, Math.max(1, Math.floor(n / 2)));
+  }
+
+  // 8) Cartes "consécutifs"
+  if (card.id === 'cons2' || card.id === 'cons2Exp' || card.id === 'cons3') {
+    const needConsec = card.id === 'cons3' ? 3 : 2;
+    if (hasConsecutive(values, needConsec)) {
+      for (let i = 0; i < n; i++) {
+        if (values[i] <= 2) idsToReroll.push(i);
+      }
+      return idsToReroll;
+    }
+    return findIndicesOfSmallest(values, Math.max(1, Math.floor(n / 2)));
+  }
+
+  // Fallback générique : dés faibles
+  for (let i = 0; i < n; i++) {
+    if (values[i] <= 2) idsToReroll.push(i);
+  }
+  return idsToReroll;
+}
+
+// Helper : retourne les indices des `k` plus petits dés
+function findIndicesOfSmallest(values, k) {
+  const indexed = values.map((v, i) => ({ v, i }));
+  indexed.sort((a, b) => a.v - b.v);
+  return indexed.slice(0, k).map(x => x.i);
+}
+
+/**
+ * Décide si l'IA relance et quels dés relancer.
+ * Compare 3 options : valider | relancer ciblé | relancer tout.
+ * Choisit celle de meilleure utilité (espérance × probabilité de succès).
+ */
 function aiDecideReroll() {
   const aiIdx = state.currentPlayer;
   const ai = state.players[aiIdx];
@@ -4046,33 +4223,119 @@ function aiDecideReroll() {
   const currentValid = evalCardRule(card, ai.currentValues);
   const currentSum = currentValid ? diceSum(ai.currentValues) : 0;
 
-  // Simuler un relancement
-  const n = ai.chosen;
-  let expectedAfter = 0;
-  const trials = 300;
-  for (let t=0;t<trials;t++) {
-    const rolls = Array.from({length:n}, ()=>1+Math.floor(Math.random()*6));
-    const ok = evalCardRule(card, rolls);
-    expectedAfter += ok ? diceSum(rolls) : 0;
+  // -- 1) Identifier les dés "problématiques" (ciblage stratégique) --
+  const targetedIndices = aiPickDiceToReroll(card, ai.currentValues);
+
+  // -- 2) Simuler le résultat attendu d'une relance ciblée --
+  function simulatePartialReroll(indicesToReroll) {
+    if (indicesToReroll.length === 0) {
+      return { expectedSum: currentValid ? currentSum : 0, successRate: currentValid ? 1 : 0 };
+    }
+    const trials = 500;
+    let totalSum = 0;
+    let successes = 0;
+    for (let t = 0; t < trials; t++) {
+      const sim = [...ai.currentValues];
+      for (const i of indicesToReroll) {
+        sim[i] = 1 + Math.floor(Math.random() * 6);
+      }
+      if (evalCardRule(card, sim)) {
+        successes++;
+        totalSum += diceSum(sim);
+      }
+    }
+    return {
+      expectedSum: successes > 0 ? totalSum / successes : 0,
+      successRate: successes / trials
+    };
   }
-  expectedAfter /= trials;
 
-  const target = rivalScore;
-
-  let shouldReroll = false;
-  if (!currentValid) {
-    shouldReroll = true;
-  } else if (currentSum < target) {
-    if (expectedAfter + 1.5 >= currentSum) shouldReroll = true;
-  } else if (currentSum <= expectedAfter - 2 && rollsLeft >= 2) {
-    shouldReroll = true;
+  // -- 3) Simuler le résultat attendu d'une relance complète --
+  function simulateFullReroll() {
+    const trials = 500;
+    let totalSum = 0;
+    let successes = 0;
+    const n = ai.chosen;
+    for (let t = 0; t < trials; t++) {
+      const sim = Array.from({length: n}, ()=> 1 + Math.floor(Math.random() * 6));
+      if (evalCardRule(card, sim)) {
+        successes++;
+        totalSum += diceSum(sim);
+      }
+    }
+    return {
+      expectedSum: successes > 0 ? totalSum / successes : 0,
+      successRate: successes / trials
+    };
   }
 
-  if (shouldReroll) {
-    setTimeout(()=> doReroll(), 900);
-  } else {
+  // Pénalité d'échec : cartes explosives coûtent cher
+  const penaltyForFail = card.explosive ? 12 : 3;
+  // Utilité = (gain × probabilité de succès) - (perte × probabilité d'échec)
+  const utilityOf = (expected, rate) => expected * rate - penaltyForFail * (1 - rate);
+
+  // Utilité actuelle = ce qu'on a maintenant
+  const currentUtility = currentValid ? currentSum : -penaltyForFail;
+  const partial = targetedIndices.length > 0 ? simulatePartialReroll(targetedIndices) : null;
+  const full = simulateFullReroll();
+
+  const partialUtility = partial ? utilityOf(partial.expectedSum, partial.successRate) : -Infinity;
+  const fullUtility = utilityOf(full.expectedSum, full.successRate);
+
+  // Bonus de "deuxième chance" si on a encore plusieurs relances
+  const safetyBonus = rollsLeft >= 2 ? 1.2 : 0;
+
+  // Bonus "être en retard" : si on est sous l'adversaire, il FAUT prendre des risques
+  const behindBonus = (rivalScore > 0 && currentSum < rivalScore) ? 2.5 : 0;
+
+  // -- 4) Décision --
+  let action = 'validate';
+  let chosenIndices = [];
+  let bestUtility = currentUtility;
+
+  // Option A : relance ciblée (uniquement les dés problématiques)
+  // Préférée car moins risquée (on garde les bons dés)
+  if (partial && partialUtility > bestUtility + 0.3) {
+    action = 'rerollPartial';
+    chosenIndices = targetedIndices;
+    bestUtility = partialUtility;
+  }
+
+  // Option B : relance complète si vraiment meilleure
+  // Plus risquée donc on demande un écart plus net
+  const fullThreshold = currentValid ? 2.0 : 0.3;
+  if (fullUtility + safetyBonus + behindBonus > bestUtility + fullThreshold) {
+    action = 'rerollAll';
+    chosenIndices = [];
+    bestUtility = fullUtility + safetyBonus + behindBonus;
+  }
+
+  // SAFETY : si invalide et qu'on a des relances, ne JAMAIS valider un lancer invalide
+  if (!currentValid && rollsLeft >= 1 && action === 'validate') {
+    if (partial && partialUtility >= fullUtility) {
+      action = 'rerollPartial';
+      chosenIndices = targetedIndices;
+    } else {
+      action = 'rerollAll';
+      chosenIndices = [];
+    }
+  }
+
+  // -- 5) Exécution --
+  if (action === 'validate') {
     setTimeout(()=> aiValidate(), 600);
+    return;
   }
+
+  // Marquer les dés sélectionnés (auras dorées visuelles) AVANT le reroll
+  const scene = scenes[aiIdx];
+  if (scene) {
+    scene.dice.forEach((d, i) => {
+      d.selectedForReroll = chosenIndices.includes(i);
+    });
+  }
+  // Petit délai pour qu'on voie les dés sélectionnés visuellement
+  setTimeout(()=> doReroll(), action === 'rerollPartial' ? 1200 : 900);
 }
 
 function aiValidate() {
@@ -4141,10 +4404,10 @@ function doReroll() {
   const scene = scenes[playerIdx];
 
   // Déterminer quels dés relancer
-  // - Humain (P0 ou autre) : si au moins 1 dé sélectionné → ne relancer que ceux-là
-  // - Sinon (humain sans sélection, ou IA) → relancer tous
+  // - Humain : si au moins 1 dé sélectionné → ne relancer que ceux-là
+  // - IA : aiDecideReroll a marqué les dés avec selectedForReroll → on lit pareil
   const selectedIndices = [];
-  if (state.players[playerIdx].isHuman && scene) {
+  if (scene) {
     scene.dice.forEach((d, i) => {
       if (d.selectedForReroll) selectedIndices.push(i);
     });
