@@ -4088,54 +4088,89 @@ function aiPickDiceToReroll(card, values) {
 
   // 3) Cartes "somme < X" (invalide si somme >= X)
   //    sum7 (<7), sum10 (<10), sum11 (<11), sum13 (<13)
-  //    → ON VEUT RESTER SOUS LE SEUIL, donc on relance les dés FORTS (5)
-  //      pour avoir une valeur plus basse, et les boss (6 = 0 valeur, autant tenter mieux)
+  //    → ON VEUT RESTER SOUS LE SEUIL, et maximiser le score sans le dépasser
   if (card.id === 'sum7' || card.id === 'sum10' || card.id === 'sum11' || card.id === 'sum13') {
     const currentSum = diceSum(values);
     const threshold = card.id === 'sum7' ? 7
                     : card.id === 'sum10' ? 10
                     : card.id === 'sum11' ? 11 : 13;
-    const maxAllowed = threshold - 1; // le score maximum visé
+    const maxAllowed = threshold - 1;
 
-    // CAS A : déjà au-dessus du seuil (invalide) → relancer les forts (qui font dépasser)
+    // CAS A : déjà au-dessus du seuil (invalide) → relancer les forts qui font dépasser
     if (currentSum >= threshold) {
-      // Relancer les plus grandes valeurs pour faire baisser
-      // (un dé à 5 sera probablement remplacé par 3.5 en moyenne)
       const sorted = values.map((v,i) => ({v,i}))
                            .filter(x => !isBoss(x.v))
                            .sort((a,b) => b.v - a.v);
-      // Relancer le plus grand dé (et plus si nécessaire)
       const excess = currentSum - maxAllowed;
       let removed = 0;
       for (const {v, i} of sorted) {
         idsToReroll.push(i);
         removed += v;
-        if (removed >= excess + 2) break; // marge
+        if (removed >= excess + 2) break;
       }
-      // Relancer aussi les boss (ils ne contribuent à rien, autant tenter mieux)
       for (let i = 0; i < n; i++) {
         if (isBoss(values[i]) && !idsToReroll.includes(i)) idsToReroll.push(i);
       }
       return idsToReroll;
     }
 
-    // CAS B : sous le seuil mais score faible → relancer les boss (= dés à 0)
-    //         et les très petites valeurs (1, 2) pour grimper vers le max
-    //         SANS dépasser le seuil.
-    // Marge dispo : maxAllowed - currentSum (combien on peut encore gagner)
-    const margin = maxAllowed - currentSum;
+    // CAS B : sous le seuil, on évalue chaque dé pour voir si le relancer
+    //         est statistiquement intéressant.
+    // Pour chaque dé candidat (boss ou faible), on calcule l'espérance
+    // d'amélioration nette : E[nouveau] - ancien, en respectant le seuil.
+    //
+    // Espérance d'un dé relancé sous contrainte de ne pas dépasser maxAllowed
+    // depuis (currentSum - oldValue) :
+    //   - les valeurs 1..min(6, maxAllowed - (currentSum - oldValue)) sont valides
+    //   - les autres tombent le lancer (score=0)
+    //
+    // Pour les BOSS (valeur=0 au score) : toujours intéressant si la marge permet
+    //   au moins 2-3 valeurs valides (sinon trop risqué).
+    // Pour les FAIBLES (1, 2) : intéressant si l'espérance gagnée dépasse la valeur actuelle.
+
+    function expectedAfterReroll(oldValue) {
+      // somme sans ce dé
+      const sumWithout = currentSum - (oldValue === 6 ? 0 : oldValue);
+      // valeurs autorisées pour le nouveau dé : v tel que sumWithout + v <= maxAllowed
+      //   ou v === 6 (boss, contribue 0)
+      // On suppose la nouvelle valeur uniforme sur {1..6}
+      let totalScore = 0, validCount = 0;
+      for (let nv = 1; nv <= 6; nv++) {
+        const contribution = (nv === 6) ? 0 : nv;
+        const newSum = sumWithout + contribution;
+        if (newSum <= maxAllowed) {
+          // Score si on validait : newSum
+          totalScore += newSum;
+          validCount++;
+        }
+        // sinon : invalide → 0, mais on ne valide pas, on a une autre relance
+      }
+      // Espérance brute si on validait immédiatement après cette relance :
+      // E[score] = (totalScore + 0 * (6 - validCount)) / 6
+      return { expectedScore: totalScore / 6, successRate: validCount / 6 };
+    }
+
+    // Évaluer chaque dé candidat à la relance
+    const candidates = [];
     for (let i = 0; i < n; i++) {
-      if (isBoss(values[i])) {
-        // Boss : on peut le relancer si la marge permet (espérance 3.5)
-        // Si margin >= 4, on est tranquille ; si <4, on évite (risque trop élevé)
-        if (margin >= 3) idsToReroll.push(i);
-      } else if (values[i] <= 2 && margin >= 4) {
-        // Petite valeur : on peut tenter mieux si on a au moins 4 de marge
-        // (la nouvelle valeur sera entre 1 et 6, espérance 3.5)
-        idsToReroll.push(i);
+      const v = values[i];
+      // Candidat = boss (qui ne rapporte rien) OU petit (1, 2) qu'on peut améliorer
+      if (isBoss(v) || v <= 2) {
+        const exp = expectedAfterReroll(v);
+        // Gain net = (nouvelle espérance) - (score actuel si on validait)
+        const gain = exp.expectedScore - currentSum;
+        candidates.push({ i, v, gain, exp });
       }
     }
-    return idsToReroll;
+
+    // Garder ceux dont le gain est positif ou neutre (la relance ne pénalise pas)
+    // Pour les boss : seuil très permissif (-0.2) car on est déjà à 0 sur ce dé
+    // Pour les autres faibles : seuil plus strict (0.3) pour éviter relances inutiles
+    const worthReroll = candidates.filter(c => {
+      const threshold_ = isBoss(c.v) ? -0.2 : 0.3;
+      return c.gain > threshold_;
+    });
+    return worthReroll.map(c => c.i);
   }
 
   // 4) Cartes "≥X dés impairs" interdits : odd2 (≥2 invalide), odd3exp (≥3 invalide)
@@ -4382,27 +4417,44 @@ function aiDecideReroll() {
   // CAS 2 : On est EN RETARD sur l'adversaire (currentSum <= rivalScore)
   //         → Valider = perdre à coup sûr. Il FAUT essayer de relancer.
   if (rivalScore > 0 && currentSum <= rivalScore) {
-    // Comparer : "valider = perte certaine" vs "relancer = chance de gagner"
-    // Même 20% de chance de battre l'adversaire est meilleur que 0%.
+    // Si aucun dé n'est naturellement "problématique" mais qu'on est en retard,
+    // viser stratégiquement le(s) plus petit(s) dé(s) pour tenter une amélioration
+    let activeTargeted = targetedIndices;
+    if (activeTargeted.length === 0 && ai.currentValues.length > 0) {
+      // Trouver les indices du/des plus petit(s) dé(s) (en excluant les valeurs au max=6)
+      // Note : pour les cartes "somme < X", relancer une grande valeur n'est PAS souhaitable.
+      // Pour les autres cartes, relancer un dé faible améliore l'espérance.
+      const indexedVals = ai.currentValues.map((v, i) => ({v, i}));
+      const isSumCard = ['sum7','sum10','sum11','sum13'].includes(card.id);
+      if (isSumCard) {
+        // Pour les cartes "somme < X" : relancer les BOSS (=0) ou les très petits
+        // car les grands risquent de faire dépasser le seuil
+        const small = indexedVals.filter(x => x.v === 6 || x.v <= 2);
+        activeTargeted = small.map(x => x.i);
+      } else {
+        // Pour les autres cartes : relancer 1 ou 2 plus petits dés pour viser plus haut
+        const sorted = indexedVals.slice().sort((a,b) => a.v - b.v);
+        activeTargeted = sorted.slice(0, Math.min(2, sorted.length)).map(x => x.i);
+      }
+    }
 
-    const partialBeatChance = partial ? partial.probBeatRival : 0;
+    const partialBeat = activeTargeted.length > 0 ? simulatePartialReroll(activeTargeted) : null;
+    const partialBeatChance = partialBeat ? partialBeat.probBeatRival : 0;
     const fullBeatChance = full.probBeatRival;
 
-    // On choisit l'option qui maximise la chance de battre l'adversaire
-    // (à moins que ça nous fasse tomber bien plus bas en cas d'échec)
+    // Choisir l'option qui maximise la chance de battre l'adversaire
     if (partialBeatChance >= 0.1 && partialBeatChance >= fullBeatChance - 0.1) {
       // Relance ciblée : moins risqué, on garde les bons dés
-      return executeReroll(partial, full, targetedIndices, /*forceReroll*/ true, 'partial');
+      return executeReroll(partialBeat, full, activeTargeted, /*forceReroll*/ true, 'partial');
     } else if (fullBeatChance >= 0.05) {
       // Relance complète : seule chance, on prend le risque
-      return executeReroll(partial, full, targetedIndices, /*forceReroll*/ true, 'full');
+      return executeReroll(partialBeat, full, activeTargeted, /*forceReroll*/ true, 'full');
     } else {
-      // Aucune option n'a plus de 5% de chance → relance quand même la ciblée
-      // (mieux que de valider une perte certaine)
-      if (targetedIndices.length > 0) {
-        return executeReroll(partial, full, targetedIndices, true, 'partial');
+      // Aucune option n'a plus de 5% : relance quand même
+      if (activeTargeted.length > 0) {
+        return executeReroll(partialBeat, full, activeTargeted, true, 'partial');
       }
-      return executeReroll(partial, full, targetedIndices, true, 'full');
+      return executeReroll(partialBeat, full, activeTargeted, true, 'full');
     }
   }
 
